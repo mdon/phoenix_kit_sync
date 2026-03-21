@@ -172,9 +172,13 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       # Fetch sender statuses for receiver connections (async)
       fetch_sender_statuses(receiver_connections)
 
-      # Verify receiver connections still exist for sender connections (async)
-      # This handles cases where receiver severed but notification was missed
-      verify_receiver_connections(sender_connections)
+      # Verify receiver connections after a delay — gives incoming API
+      # notifications (delete, status change) time to arrive first.
+      # This prevents races where verify suspends a connection that's
+      # about to be deleted by an incoming notification.
+      if sender_connections != [] do
+        Process.send_after(self(), :verify_receiver_connections, 5_000)
+      end
     end
 
     socket
@@ -1003,6 +1007,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             {:noreply, socket}
         end
     end
+  end
+
+  def handle_info(:verify_receiver_connections, socket) do
+    sender_connections =
+      Connections.list_connections(direction: "sender")
+
+    verify_receiver_connections(sender_connections)
+    {:noreply, socket}
   end
 
   # PubSub handlers for real-time updates
