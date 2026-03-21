@@ -8,10 +8,10 @@ defmodule PhoenixKitSync.Web.History do
   use PhoenixKitWeb, :live_view
   use Gettext, backend: PhoenixKitWeb.Gettext
 
-  alias PhoenixKitSync
-  alias PhoenixKitSync.Transfers
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
+  alias PhoenixKitSync
+  alias PhoenixKitSync.Transfers
 
   @per_page 20
 
@@ -443,21 +443,20 @@ defmodule PhoenixKitSync.Web.History do
     """
   end
 
-  defp status_badge(assigns) do
-    color =
-      case assigns.status do
-        "pending" -> "badge-ghost"
-        "pending_approval" -> "badge-warning"
-        "approved" -> "badge-info"
-        "denied" -> "badge-error"
-        "in_progress" -> "badge-info"
-        "completed" -> "badge-success"
-        "failed" -> "badge-error"
-        "cancelled" -> "badge-ghost"
-        "expired" -> "badge-ghost"
-        _ -> "badge-ghost"
-      end
+  @status_colors %{
+    "pending" => "badge-ghost",
+    "pending_approval" => "badge-warning",
+    "approved" => "badge-info",
+    "denied" => "badge-error",
+    "in_progress" => "badge-info",
+    "completed" => "badge-success",
+    "failed" => "badge-error",
+    "cancelled" => "badge-ghost",
+    "expired" => "badge-ghost"
+  }
 
+  defp status_badge(assigns) do
+    color = Map.get(@status_colors, assigns.status, "badge-ghost")
     assigns = assign(assigns, :color, color)
 
     ~H"""

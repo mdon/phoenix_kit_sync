@@ -80,12 +80,12 @@ defmodule PhoenixKitSync do
   use PhoenixKit.Module
 
   alias PhoenixKit.Dashboard.Tab
+  alias PhoenixKit.Settings
+  alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKitSync.DataExporter
   alias PhoenixKitSync.DataImporter
   alias PhoenixKitSync.SchemaInspector
   alias PhoenixKitSync.SessionStore
-  alias PhoenixKit.Settings
-  alias PhoenixKit.Utils.Date, as: UtilsDate
 
   @module_name "sync"
   @enabled_key "sync_enabled"

@@ -266,33 +266,7 @@ defmodule PhoenixKitSync.Web.SyncWebsock do
       Logger.debug("Sync.Websock: Schema requested for #{table}")
 
       # Check table access for permanent connections
-      response =
-        if table_allowed?(table, state) do
-          case SchemaInspector.get_schema(table) do
-            {:ok, schema} ->
-              encode_push("transfer:#{state.code}", "response:schema", %{
-                "schema" => schema,
-                "ref" => client_ref
-              })
-
-            {:error, :not_found} ->
-              encode_push("transfer:#{state.code}", "response:error", %{
-                "error" => "Table not found: #{table}",
-                "ref" => client_ref
-              })
-
-            {:error, reason} ->
-              encode_push("transfer:#{state.code}", "response:error", %{
-                "error" => "Failed to get schema: #{inspect(reason)}",
-                "ref" => client_ref
-              })
-          end
-        else
-          encode_push("transfer:#{state.code}", "response:error", %{
-            "error" => "Access denied to table: #{table}",
-            "ref" => client_ref
-          })
-        end
+      response = fetch_and_respond_schema(table, client_ref, state)
 
       {:push, {:text, response}, state}
     else
@@ -312,27 +286,7 @@ defmodule PhoenixKitSync.Web.SyncWebsock do
     if state.joined do
       Logger.debug("Sync.Websock: Count requested for #{table}")
 
-      response =
-        if table_allowed?(table, state) do
-          case DataExporter.get_count(table) do
-            {:ok, count} ->
-              encode_push("transfer:#{state.code}", "response:count", %{
-                "count" => count,
-                "ref" => client_ref
-              })
-
-            {:error, reason} ->
-              encode_push("transfer:#{state.code}", "response:error", %{
-                "error" => "Failed to get count: #{inspect(reason)}",
-                "ref" => client_ref
-              })
-          end
-        else
-          encode_push("transfer:#{state.code}", "response:error", %{
-            "error" => "Access denied to table: #{table}",
-            "ref" => client_ref
-          })
-        end
+      response = fetch_and_respond_count(table, client_ref, state)
 
       {:push, {:text, response}, state}
     else
@@ -373,6 +327,64 @@ defmodule PhoenixKitSync.Web.SyncWebsock do
   end
 
   # ===========================================
+  # SCHEMA FETCHING HELPER
+  # ===========================================
+
+  defp fetch_and_respond_schema(table, client_ref, state) do
+    if table_allowed?(table, state) do
+      case SchemaInspector.get_schema(table) do
+        {:ok, schema} ->
+          encode_push("transfer:#{state.code}", "response:schema", %{
+            "schema" => schema,
+            "ref" => client_ref
+          })
+
+        {:error, :not_found} ->
+          encode_push("transfer:#{state.code}", "response:error", %{
+            "error" => "Table not found: #{table}",
+            "ref" => client_ref
+          })
+
+        {:error, reason} ->
+          encode_push("transfer:#{state.code}", "response:error", %{
+            "error" => "Failed to get schema: #{inspect(reason)}",
+            "ref" => client_ref
+          })
+      end
+    else
+      encode_push("transfer:#{state.code}", "response:error", %{
+        "error" => "Access denied to table: #{table}",
+        "ref" => client_ref
+      })
+    end
+  end
+
+  # COUNT FETCHING HELPER
+  # ===========================================
+
+  defp fetch_and_respond_count(table, client_ref, state) do
+    if table_allowed?(table, state) do
+      case DataExporter.get_count(table) do
+        {:ok, count} ->
+          encode_push("transfer:#{state.code}", "response:count", %{
+            "count" => count,
+            "ref" => client_ref
+          })
+
+        {:error, reason} ->
+          encode_push("transfer:#{state.code}", "response:error", %{
+            "error" => "Failed to get count: #{inspect(reason)}",
+            "ref" => client_ref
+          })
+      end
+    else
+      encode_push("transfer:#{state.code}", "response:error", %{
+        "error" => "Access denied to table: #{table}",
+        "ref" => client_ref
+      })
+    end
+  end
+
   # RECORDS FETCHING HELPER
   # ===========================================
 

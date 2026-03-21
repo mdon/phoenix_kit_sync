@@ -22,11 +22,11 @@ defmodule PhoenixKitSync.Web.ApiController do
   require Logger
 
   alias Ecto.Adapters.SQL
+  alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKitSync
   alias PhoenixKitSync.Connections
   alias PhoenixKitSync.SchemaInspector
   alias PhoenixKitSync.Transfers
-  alias PhoenixKit.Utils.Date, as: UtilsDate
 
   @doc """
   Registers an incoming connection from a remote site.
@@ -1006,21 +1006,7 @@ defmodule PhoenixKitSync.Web.ApiController do
     case SQL.query(repo, tables_query, []) do
       {:ok, %{rows: rows}} ->
         Enum.map(rows, fn [name, size_bytes] ->
-          row_count = get_actual_row_count(repo, name)
-
-          checksum =
-            case SchemaInspector.get_table_checksum(name) do
-              {:ok, cs} when is_binary(cs) -> cs
-              _ -> nil
-            end
-
-          %{
-            "name" => name,
-            "row_count" => row_count,
-            "size_bytes" => size_bytes,
-            "checksum" => checksum,
-            "depends_on" => Map.get(fk_map, name, [])
-          }
+          build_table_info(repo, name, size_bytes, fk_map)
         end)
 
       {:error, _} ->
@@ -1028,6 +1014,24 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   rescue
     _ -> []
+  end
+
+  defp build_table_info(repo, name, size_bytes, fk_map) do
+    row_count = get_actual_row_count(repo, name)
+
+    checksum =
+      case SchemaInspector.get_table_checksum(name) do
+        {:ok, cs} when is_binary(cs) -> cs
+        _ -> nil
+      end
+
+    %{
+      "name" => name,
+      "row_count" => row_count,
+      "size_bytes" => size_bytes,
+      "checksum" => checksum,
+      "depends_on" => Map.get(fk_map, name, [])
+    }
   end
 
   defp get_actual_row_count(repo, table_name) do

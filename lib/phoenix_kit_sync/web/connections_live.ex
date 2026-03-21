@@ -11,14 +11,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
   require Logger
 
+  alias PhoenixKit.Settings
+  alias PhoenixKit.Utils.Date, as: UtilsDate
+  alias PhoenixKit.Utils.Routes
   alias PhoenixKitSync
   alias PhoenixKitSync.Connection
   alias PhoenixKitSync.ConnectionNotifier
   alias PhoenixKitSync.Connections
   alias PhoenixKitSync.SchemaInspector
-  alias PhoenixKit.Settings
-  alias PhoenixKit.Utils.Date, as: UtilsDate
-  alias PhoenixKit.Utils.Routes
 
   @impl true
   def mount(params, _session, socket) do
@@ -187,21 +187,19 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     Enum.each(receiver_connections, fn conn ->
       Task.start(fn ->
-        case ConnectionNotifier.query_sender_status(conn) do
-          {:ok, status} when is_binary(status) ->
-            send(pid, {:sender_status_fetched, conn.uuid, status})
-
-          {:ok, :offline} ->
-            send(pid, {:sender_status_fetched, conn.uuid, "offline"})
-
-          {:ok, :not_found} ->
-            send(pid, {:sender_status_fetched, conn.uuid, "not_found"})
-
-          {:error, _reason} ->
-            send(pid, {:sender_status_fetched, conn.uuid, "error"})
-        end
+        status = resolve_sender_status(conn)
+        send(pid, {:sender_status_fetched, conn.uuid, status})
       end)
     end)
+  end
+
+  defp resolve_sender_status(conn) do
+    case ConnectionNotifier.query_sender_status(conn) do
+      {:ok, status} when is_binary(status) -> status
+      {:ok, :offline} -> "offline"
+      {:ok, :not_found} -> "not_found"
+      {:error, _reason} -> "error"
+    end
   end
 
   defp verify_receiver_connections(sender_connections) do
@@ -486,22 +484,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     different_tables =
       socket.assigns.sync_tables
       |> Enum.filter(fn table ->
-        name = get_table_field(table, :name)
-        local_count = Map.get(local_counts, name)
-
-        if is_nil(local_count) do
-          true
-        else
-          local_cs = Map.get(local_checksums, name)
-          sender_cs = get_table_field(table, :checksum)
-
-          if sender_cs && local_cs do
-            sender_cs != local_cs
-          else
-            sender_count = get_table_field(table, :row_count) || 0
-            local_count != sender_count
-          end
-        end
+        table_differs?(table, local_counts, local_checksums)
       end)
       |> Enum.map(&get_table_field(&1, :name))
 
@@ -700,24 +683,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       case result do
         {:ok, tables} ->
           # Get local counts and checksums for comparison
-          {local_counts, local_checksums} =
-            Enum.reduce(tables, {%{}, %{}}, fn t, {counts, checksums} ->
-              name = get_table_field(t, :name)
-
-              count =
-                case SchemaInspector.get_local_count(name) do
-                  {:ok, c} -> c
-                  {:error, _} -> nil
-                end
-
-              checksum =
-                case SchemaInspector.get_table_checksum(name) do
-                  {:ok, cs} -> cs
-                  _ -> nil
-                end
-
-              {Map.put(counts, name, count), Map.put(checksums, name, checksum)}
-            end)
+          {local_counts, local_checksums} = build_local_counts_and_checksums(tables)
 
           socket
           |> assign(:sync_tables, tables)
@@ -1178,21 +1144,25 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     if MapSet.member?(visited, node) do
       {sorted, visited}
     else
-      deps = Map.get(graph, node, [])
+      visit_unvisited_node(graph, node, sorted, visited, path)
+    end
+  end
 
-      # Guard against cycles
-      if MapSet.member?(path, node) do
-        {sorted ++ [node], MapSet.put(visited, node)}
-      else
-        path = MapSet.put(path, node)
+  defp visit_unvisited_node(graph, node, sorted, visited, path) do
+    deps = Map.get(graph, node, [])
 
-        {sorted, visited} =
-          Enum.reduce(deps, {sorted, visited}, fn dep, {s, v} ->
-            visit_node(graph, dep, s, v, path)
-          end)
+    # Guard against cycles
+    if MapSet.member?(path, node) do
+      {sorted ++ [node], MapSet.put(visited, node)}
+    else
+      path = MapSet.put(path, node)
 
-        {sorted ++ [node], MapSet.put(visited, node)}
-      end
+      {sorted, visited} =
+        Enum.reduce(deps, {sorted, visited}, fn dep, {s, v} ->
+          visit_node(graph, dep, s, v, path)
+        end)
+
+      {sorted ++ [node], MapSet.put(visited, node)}
     end
   end
 
@@ -1228,15 +1198,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         )
 
         # Notify the remote site to register this connection (async)
-        if connection.direction == "sender" do
-          Logger.info(
-            "[Sync.Connections] Notifying remote site (async) " <>
-              "| uuid=#{connection.uuid} " <>
-              "| remote_url=#{connection.site_url}"
-          )
-
-          Task.start(fn -> log_remote_notification(connection, token) end)
-        end
+        maybe_notify_remote(connection, token)
 
         socket =
           socket
@@ -2633,20 +2595,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   # ===========================================
 
   defp status_badge(assigns) do
-    {color, label} =
-      case assigns.status do
-        "pending" -> {"badge-warning", "Pending"}
-        "active" -> {"badge-success", "Active"}
-        "suspended" -> {"badge-error", "Suspended"}
-        "revoked" -> {"badge-ghost", "Revoked"}
-        "expired" -> {"badge-ghost", "Expired"}
-        "loading" -> {"badge-ghost animate-pulse", "Loading..."}
-        "offline" -> {"badge-warning", "Sender Offline"}
-        "not_found" -> {"badge-error", "Not Found"}
-        "error" -> {"badge-error", "Error"}
-        _ -> {"badge-ghost", String.capitalize(to_string(assigns.status))}
-      end
-
+    {color, label} = status_badge_style(assigns.status)
     assigns = assigns |> assign(:color, color) |> assign(:label, label)
 
     ~H"""
@@ -2655,6 +2604,17 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     </span>
     """
   end
+
+  defp status_badge_style("pending"), do: {"badge-warning", "Pending"}
+  defp status_badge_style("active"), do: {"badge-success", "Active"}
+  defp status_badge_style("suspended"), do: {"badge-error", "Suspended"}
+  defp status_badge_style("revoked"), do: {"badge-ghost", "Revoked"}
+  defp status_badge_style("expired"), do: {"badge-ghost", "Expired"}
+  defp status_badge_style("loading"), do: {"badge-ghost animate-pulse", "Loading..."}
+  defp status_badge_style("offline"), do: {"badge-warning", "Sender Offline"}
+  defp status_badge_style("not_found"), do: {"badge-error", "Not Found"}
+  defp status_badge_style("error"), do: {"badge-error", "Error"}
+  defp status_badge_style(status), do: {"badge-ghost", String.capitalize(to_string(status))}
 
   # ===========================================
   # HELPER FUNCTIONS
@@ -2811,6 +2771,60 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   defp checksums_match?(_, _), do: false
 
   defp checksums_comparable?(s, l), do: is_binary(s) and is_binary(l)
+
+  defp table_differs?(table, local_counts, local_checksums) do
+    name = get_table_field(table, :name)
+    local_count = Map.get(local_counts, name)
+
+    if is_nil(local_count) do
+      true
+    else
+      table_data_differs?(table, local_count, Map.get(local_checksums, name))
+    end
+  end
+
+  defp table_data_differs?(table, local_count, local_cs) do
+    sender_cs = get_table_field(table, :checksum)
+
+    if sender_cs && local_cs do
+      sender_cs != local_cs
+    else
+      sender_count = get_table_field(table, :row_count) || 0
+      local_count != sender_count
+    end
+  end
+
+  defp build_local_counts_and_checksums(tables) do
+    Enum.reduce(tables, {%{}, %{}}, fn t, {counts, checksums} ->
+      name = get_table_field(t, :name)
+
+      count =
+        case SchemaInspector.get_local_count(name) do
+          {:ok, c} -> c
+          {:error, _} -> nil
+        end
+
+      checksum =
+        case SchemaInspector.get_table_checksum(name) do
+          {:ok, cs} -> cs
+          _ -> nil
+        end
+
+      {Map.put(counts, name, count), Map.put(checksums, name, checksum)}
+    end)
+  end
+
+  defp maybe_notify_remote(%{direction: "sender"} = connection, token) do
+    Logger.info(
+      "[Sync.Connections] Notifying remote site (async) " <>
+        "| uuid=#{connection.uuid} " <>
+        "| remote_url=#{connection.site_url}"
+    )
+
+    Task.start(fn -> log_remote_notification(connection, token) end)
+  end
+
+  defp maybe_notify_remote(_connection, _token), do: :ok
 
   defp log_remote_notification(connection, token) do
     result = ConnectionNotifier.notify_remote_site(connection, token)

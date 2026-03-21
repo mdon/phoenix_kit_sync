@@ -285,12 +285,7 @@ defmodule PhoenixKitSync.Client do
     strategies = Keyword.get(opts, :strategies, %{})
 
     with {:ok, all_tables} <- list_tables(client, opts) do
-      tables =
-        if tables_opt do
-          Enum.filter(all_tables, fn t -> t["name"] in tables_opt end)
-        else
-          all_tables
-        end
+      tables = filter_tables(all_tables, tables_opt)
 
       results =
         Enum.reduce(tables, %{}, fn table_info, acc ->
@@ -299,13 +294,7 @@ defmodule PhoenixKitSync.Client do
 
           Logger.info("Sync.Client: Transferring table #{table} with strategy #{strategy}")
 
-          case transfer(client, table, Keyword.put(opts, :strategy, strategy)) do
-            {:ok, result} ->
-              Map.put(acc, table, result)
-
-            {:error, reason} ->
-              Map.put(acc, table, %{error: reason})
-          end
+          transfer_and_collect(client, table, opts, strategy, acc)
         end)
 
       {:ok, results}
@@ -315,6 +304,21 @@ defmodule PhoenixKitSync.Client do
   # ===========================================
   # PRIVATE FUNCTIONS
   # ===========================================
+
+  defp filter_tables(all_tables, nil), do: all_tables
+
+  defp filter_tables(all_tables, tables_opt),
+    do: Enum.filter(all_tables, fn t -> t["name"] in tables_opt end)
+
+  defp transfer_and_collect(client, table, opts, strategy, acc) do
+    case transfer(client, table, Keyword.put(opts, :strategy, strategy)) do
+      {:ok, result} ->
+        Map.put(acc, table, result)
+
+      {:error, reason} ->
+        Map.put(acc, table, %{error: reason})
+    end
+  end
 
   defp wait_for_connection(pid, timeout) do
     receive do
@@ -382,7 +386,15 @@ defmodule PhoenixKitSync.Client do
   end
 
   defp fetch_and_import_all(client, table, strategy, batch_size, timeout) do
-    fetch_and_import_loop(client, table, strategy, batch_size, timeout, 0, %{
+    loop_state = %{
+      client: client,
+      table: table,
+      strategy: strategy,
+      batch_size: batch_size,
+      timeout: timeout
+    }
+
+    fetch_and_import_loop(loop_state, 0, %{
       created: 0,
       updated: 0,
       skipped: 0,
@@ -390,33 +402,31 @@ defmodule PhoenixKitSync.Client do
     })
   end
 
-  defp fetch_and_import_loop(client, table, strategy, batch_size, timeout, offset, acc) do
+  defp fetch_and_import_loop(state, offset, acc) do
+    %{client: client, table: table, batch_size: batch_size, timeout: timeout} = state
+
     case fetch_records(client, table, offset: offset, limit: batch_size, timeout: timeout) do
       {:ok, %{records: records, has_more: has_more}} when records != [] ->
-        case PhoenixKitSync.import_records(table, records, strategy) do
-          {:ok, result} ->
-            new_acc = merge_results(acc, result)
-
-            if has_more do
-              fetch_and_import_loop(
-                client,
-                table,
-                strategy,
-                batch_size,
-                timeout,
-                offset + batch_size,
-                new_acc
-              )
-            else
-              {:ok, new_acc}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+        import_and_continue(state, offset, acc, records, has_more)
 
       {:ok, %{records: []}} ->
         {:ok, acc}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp import_and_continue(state, offset, acc, records, has_more) do
+    case PhoenixKitSync.import_records(state.table, records, state.strategy) do
+      {:ok, result} ->
+        new_acc = merge_results(acc, result)
+
+        if has_more do
+          fetch_and_import_loop(state, offset + state.batch_size, new_acc)
+        else
+          {:ok, new_acc}
+        end
 
       {:error, reason} ->
         {:error, reason}

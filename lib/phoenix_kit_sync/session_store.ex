@@ -235,23 +235,7 @@ defmodule PhoenixKitSync.SessionStore do
     orphaned =
       :ets.foldl(
         fn {code, session}, acc ->
-          case Map.get(session, :owner_pid) do
-            nil ->
-              # Session without owner - check if it's very old (created > 24h ago)
-              if session_too_old?(session) do
-                [code | acc]
-              else
-                acc
-              end
-
-            pid when is_pid(pid) ->
-              # Check if the process is still alive
-              if Process.alive?(pid) do
-                acc
-              else
-                [code | acc]
-              end
-          end
+          if orphaned_session?(session), do: [code | acc], else: acc
         end,
         [],
         @table_name
@@ -262,6 +246,13 @@ defmodule PhoenixKitSync.SessionStore do
 
     if orphaned != [] do
       Logger.debug("Sync.SessionStore: Cleaned up #{length(orphaned)} orphaned sessions")
+    end
+  end
+
+  defp orphaned_session?(session) do
+    case Map.get(session, :owner_pid) do
+      nil -> session_too_old?(session)
+      pid when is_pid(pid) -> not Process.alive?(pid)
     end
   end
 

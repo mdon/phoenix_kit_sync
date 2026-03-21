@@ -53,10 +53,10 @@ defmodule PhoenixKitSync.Transfers do
 
   import Ecto.Query, warn: false
 
-  alias PhoenixKitSync.Transfer
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKit.Utils.UUID, as: UUIDUtils
+  alias PhoenixKitSync.Transfer
 
   # ===========================================
   # CRUD OPERATIONS

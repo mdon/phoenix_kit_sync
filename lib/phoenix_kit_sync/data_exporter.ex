@@ -23,8 +23,8 @@ defmodule PhoenixKitSync.DataExporter do
       ]}
   """
 
-  alias PhoenixKitSync.SchemaInspector
   alias PhoenixKit.RepoHelper
+  alias PhoenixKitSync.SchemaInspector
 
   @default_limit 100
   @max_limit 1000
@@ -112,16 +112,7 @@ defmodule PhoenixKitSync.DataExporter do
           Stream.resource(
             fn -> 0 end,
             fn offset ->
-              case do_fetch_records(table_name, schema, table_schema, offset, batch_size, opts) do
-                {:ok, []} ->
-                  {:halt, offset}
-
-                {:ok, records} ->
-                  {[records], offset + length(records)}
-
-                {:error, _reason} ->
-                  {:halt, offset}
-              end
+              stream_next_batch(table_name, schema, table_schema, offset, batch_size, opts)
             end,
             fn _offset -> :ok end
           )
@@ -156,19 +147,31 @@ defmodule PhoenixKitSync.DataExporter do
 
     case RepoHelper.query(query, [limit, offset]) do
       {:ok, %{rows: rows}} ->
-        records =
-          Enum.map(rows, fn row ->
-            columns
-            |> Enum.zip(row)
-            |> Enum.map(fn {col, val} -> {col, serialize_value(val)} end)
-            |> Map.new()
-          end)
-
-        {:ok, records}
+        {:ok, Enum.map(rows, &row_to_map(columns, &1))}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp stream_next_batch(table_name, schema, table_schema, offset, batch_size, opts) do
+    case do_fetch_records(table_name, schema, table_schema, offset, batch_size, opts) do
+      {:ok, []} ->
+        {:halt, offset}
+
+      {:ok, records} ->
+        {[records], offset + length(records)}
+
+      {:error, _reason} ->
+        {:halt, offset}
+    end
+  end
+
+  defp row_to_map(columns, row) do
+    columns
+    |> Enum.zip(row)
+    |> Enum.map(fn {col, val} -> {col, serialize_value(val)} end)
+    |> Map.new()
   end
 
   defp build_order_clause([]), do: ""

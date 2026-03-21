@@ -456,41 +456,32 @@ defmodule PhoenixKitSync.WebSocketClient do
   defp build_websocket_url(base_url, code) do
     uri = URI.parse(base_url)
 
-    scheme =
-      case uri.scheme do
-        "https" -> "wss"
-        "http" -> "ws"
-        "wss" -> "wss"
-        "ws" -> "ws"
-        _ -> "wss"
-      end
-
-    path =
-      case uri.path do
-        nil ->
-          "/sync/websocket"
-
-        "" ->
-          "/sync/websocket"
-
-        # If path already ends with /sync/websocket, use as-is
-        # Otherwise append /sync/websocket to the prefix path
-        p ->
-          if String.ends_with?(p, "/sync/websocket") do
-            p
-          else
-            "#{String.trim_trailing(p, "/")}/sync/websocket"
-          end
-      end
-
-    query =
-      case uri.query do
-        nil -> "code=#{code}&vsn=2.0.0"
-        q -> "#{q}&code=#{code}&vsn=2.0.0"
-      end
+    scheme = to_ws_scheme(uri.scheme)
+    path = to_sync_path(uri.path)
+    query = append_sync_query(uri.query, code)
 
     URI.to_string(%{uri | scheme: scheme, path: path, query: query})
   end
+
+  defp to_ws_scheme("https"), do: "wss"
+  defp to_ws_scheme("http"), do: "ws"
+  defp to_ws_scheme("wss"), do: "wss"
+  defp to_ws_scheme("ws"), do: "ws"
+  defp to_ws_scheme(_), do: "wss"
+
+  defp to_sync_path(nil), do: "/sync/websocket"
+  defp to_sync_path(""), do: "/sync/websocket"
+
+  defp to_sync_path(p) do
+    if String.ends_with?(p, "/sync/websocket") do
+      p
+    else
+      "#{String.trim_trailing(p, "/")}/sync/websocket"
+    end
+  end
+
+  defp append_sync_query(nil, code), do: "code=#{code}&vsn=2.0.0"
+  defp append_sync_query(q, code), do: "#{q}&code=#{code}&vsn=2.0.0"
 
   defp encode_message(topic, event, payload, ref) do
     Jason.encode!([nil, ref, topic, event, payload])

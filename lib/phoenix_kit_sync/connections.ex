@@ -47,10 +47,10 @@ defmodule PhoenixKitSync.Connections do
 
   import Ecto.Query, warn: false
 
-  alias PhoenixKitSync.Connection
   alias PhoenixKit.RepoHelper
   alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKit.Utils.UUID, as: UUIDUtils
+  alias PhoenixKitSync.Connection
 
   # ===========================================
   # CRUD OPERATIONS

@@ -61,9 +61,9 @@ defmodule PhoenixKitSync.Transfer do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias PhoenixKitSync.Connection
   alias PhoenixKit.Users.Auth.User
   alias PhoenixKit.Utils.Date, as: UtilsDate
+  alias PhoenixKitSync.Connection
   @type t :: %__MODULE__{}
 
   @primary_key {:uuid, UUIDv7, autogenerate: true}

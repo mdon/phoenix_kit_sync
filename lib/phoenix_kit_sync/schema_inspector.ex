@@ -32,8 +32,8 @@ defmodule PhoenixKitSync.SchemaInspector do
       }}
   """
 
-  alias PhoenixKitSync.{ColumnInfo, TableSchema}
   alias PhoenixKit.RepoHelper
+  alias PhoenixKitSync.{ColumnInfo, TableSchema}
 
   # Tables to always exclude from sync
   @excluded_tables [
@@ -86,14 +86,7 @@ defmodule PhoenixKitSync.SchemaInspector do
           |> Enum.map(fn [name] -> name end)
           |> Enum.reject(fn name -> excluded_table?(name, include_phoenix_kit) end)
           |> Enum.map(fn name ->
-            count =
-              if exact_counts do
-                get_exact_count(name, schema)
-              else
-                get_estimated_count(name, schema)
-              end
-
-            %{name: name, estimated_count: count}
+            %{name: name, estimated_count: get_table_count(name, schema, exact_counts)}
           end)
 
         {:ok, tables}
@@ -102,6 +95,9 @@ defmodule PhoenixKitSync.SchemaInspector do
         {:error, reason}
     end
   end
+
+  defp get_table_count(name, schema, true), do: get_exact_count(name, schema)
+  defp get_table_count(name, schema, false), do: get_estimated_count(name, schema)
 
   defp get_exact_count(table_name, schema) do
     if valid_identifier?(table_name) and valid_identifier?(schema) do

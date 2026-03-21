@@ -27,8 +27,8 @@ defmodule PhoenixKitSync.DataImporter do
       }
   """
 
-  alias PhoenixKitSync.SchemaInspector
   alias PhoenixKit.RepoHelper
+  alias PhoenixKitSync.SchemaInspector
 
   require Logger
 
@@ -68,12 +68,7 @@ defmodule PhoenixKitSync.DataImporter do
       result =
         records
         |> Enum.reduce(%{created: 0, updated: 0, skipped: 0, errors: []}, fn record, acc ->
-          case import_single_record(repo, table, record, primary_keys, strategy) do
-            {:ok, :created} -> %{acc | created: acc.created + 1}
-            {:ok, :updated} -> %{acc | updated: acc.updated + 1}
-            {:ok, :skipped} -> %{acc | skipped: acc.skipped + 1}
-            {:error, reason} -> %{acc | errors: [{record, reason} | acc.errors]}
-          end
+          accumulate_import_result(acc, repo, table, record, primary_keys, strategy)
         end)
 
       {:ok, %{result | errors: Enum.reverse(result.errors)}}
@@ -112,6 +107,15 @@ defmodule PhoenixKitSync.DataImporter do
   # ============================================================================
   # Single Record Import
   # ============================================================================
+
+  defp accumulate_import_result(acc, repo, table, record, primary_keys, strategy) do
+    case import_single_record(repo, table, record, primary_keys, strategy) do
+      {:ok, :created} -> %{acc | created: acc.created + 1}
+      {:ok, :updated} -> %{acc | updated: acc.updated + 1}
+      {:ok, :skipped} -> %{acc | skipped: acc.skipped + 1}
+      {:error, reason} -> %{acc | errors: [{record, reason} | acc.errors]}
+    end
+  end
 
   defp import_single_record(repo, table, record, primary_keys, :append) do
     # For append strategy: strip primary keys and insert as new record

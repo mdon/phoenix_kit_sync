@@ -29,9 +29,9 @@ defmodule PhoenixKitSync.Web.SocketPlug do
   @behaviour Plug
   require Logger
 
+  alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKitSync
   alias PhoenixKitSync.Connections
-  alias PhoenixKit.Utils.Date, as: UtilsDate
 
   @impl Plug
   def init(opts), do: opts
@@ -56,33 +56,37 @@ defmodule PhoenixKitSync.Web.SocketPlug do
   end
 
   defp handle_websocket_request(conn) do
-    # Check if this is a WebSocket upgrade request
-    if websocket_request?(conn) do
-      if PhoenixKitSync.enabled?() do
-        conn = Plug.Conn.fetch_query_params(conn)
-        code = conn.query_params["code"]
-        token = conn.query_params["token"]
+    cond do
+      not websocket_request?(conn) ->
+        send_bad_request(conn, "Expected WebSocket upgrade")
 
-        cond do
-          # Permanent connection token authentication
-          token != nil ->
-            validate_token_and_upgrade(conn, token)
-
-          # Ephemeral session code authentication
-          code != nil ->
-            validate_code_and_upgrade(conn, code)
-
-          # No authentication provided
-          true ->
-            Logger.warning("Sync: Connection attempt without code or token")
-            send_forbidden(conn, "Missing authentication")
-        end
-      else
+      not PhoenixKitSync.enabled?() ->
         Logger.warning("Sync: Connection attempt but module is disabled")
         send_forbidden(conn, "Module disabled")
-      end
-    else
-      send_bad_request(conn, "Expected WebSocket upgrade")
+
+      true ->
+        authenticate_and_upgrade(conn)
+    end
+  end
+
+  defp authenticate_and_upgrade(conn) do
+    conn = Plug.Conn.fetch_query_params(conn)
+    code = conn.query_params["code"]
+    token = conn.query_params["token"]
+
+    cond do
+      # Permanent connection token authentication
+      token != nil ->
+        validate_token_and_upgrade(conn, token)
+
+      # Ephemeral session code authentication
+      code != nil ->
+        validate_code_and_upgrade(conn, code)
+
+      # No authentication provided
+      true ->
+        Logger.warning("Sync: Connection attempt without code or token")
+        send_forbidden(conn, "Missing authentication")
     end
   end
 
@@ -143,66 +147,79 @@ defmodule PhoenixKitSync.Web.SocketPlug do
 
     case Connections.validate_connection(token, client_ip) do
       {:ok, db_connection} ->
-        # Check for download password if required
-        password = conn.query_params["password"]
+        validate_password_and_upgrade(conn, db_connection)
 
-        case Connections.validate_download_password(db_connection, password) do
-          :ok ->
-            Logger.info("Sync: Token connection validated for #{db_connection.name}")
-
-            # Update last connected timestamp
-            Connections.touch_connected(db_connection)
-
-            # Capture connection metadata
-            connection_info = extract_connection_info(conn)
-
-            conn =
-              WebSockAdapter.upgrade(
-                conn,
-                PhoenixKitSync.Web.SyncWebsock,
-                [
-                  auth_type: :connection,
-                  connection: db_connection,
-                  connection_info: connection_info
-                ],
-                timeout: 60_000
-              )
-
-            Plug.Conn.halt(conn)
-
-          {:error, :invalid_password} ->
-            Logger.warning("Sync: Invalid download password for connection #{db_connection.uuid}")
-            send_forbidden(conn, "Invalid password")
-        end
-
-      {:error, :invalid_token} ->
-        Logger.warning("Sync: Invalid token attempt")
-        send_forbidden(conn, "Invalid token")
-
-      {:error, :connection_not_active} ->
-        Logger.warning("Sync: Token for inactive connection")
-        send_forbidden(conn, "Connection not active")
-
-      {:error, :connection_expired} ->
-        Logger.warning("Sync: Token for expired connection")
-        send_forbidden(conn, "Connection expired")
-
-      {:error, :download_limit_reached} ->
-        Logger.warning("Sync: Download limit reached")
-        send_forbidden(conn, "Download limit reached")
-
-      {:error, :record_limit_reached} ->
-        Logger.warning("Sync: Record limit reached")
-        send_forbidden(conn, "Record limit reached")
-
-      {:error, :ip_not_allowed} ->
-        Logger.warning("Sync: IP not in whitelist: #{client_ip}")
-        send_forbidden(conn, "IP not allowed")
-
-      {:error, :outside_allowed_hours} ->
-        Logger.warning("Sync: Connection outside allowed hours")
-        send_forbidden(conn, "Outside allowed hours")
+      {:error, reason} ->
+        handle_token_error(conn, reason, client_ip)
     end
+  end
+
+  defp validate_password_and_upgrade(conn, db_connection) do
+    password = conn.query_params["password"]
+
+    case Connections.validate_download_password(db_connection, password) do
+      :ok ->
+        Logger.info("Sync: Token connection validated for #{db_connection.name}")
+
+        # Update last connected timestamp
+        Connections.touch_connected(db_connection)
+
+        # Capture connection metadata
+        connection_info = extract_connection_info(conn)
+
+        conn =
+          WebSockAdapter.upgrade(
+            conn,
+            PhoenixKitSync.Web.SyncWebsock,
+            [
+              auth_type: :connection,
+              connection: db_connection,
+              connection_info: connection_info
+            ],
+            timeout: 60_000
+          )
+
+        Plug.Conn.halt(conn)
+
+      {:error, :invalid_password} ->
+        Logger.warning("Sync: Invalid download password for connection #{db_connection.uuid}")
+        send_forbidden(conn, "Invalid password")
+    end
+  end
+
+  defp handle_token_error(conn, :invalid_token, _client_ip) do
+    Logger.warning("Sync: Invalid token attempt")
+    send_forbidden(conn, "Invalid token")
+  end
+
+  defp handle_token_error(conn, :connection_not_active, _client_ip) do
+    Logger.warning("Sync: Token for inactive connection")
+    send_forbidden(conn, "Connection not active")
+  end
+
+  defp handle_token_error(conn, :connection_expired, _client_ip) do
+    Logger.warning("Sync: Token for expired connection")
+    send_forbidden(conn, "Connection expired")
+  end
+
+  defp handle_token_error(conn, :download_limit_reached, _client_ip) do
+    Logger.warning("Sync: Download limit reached")
+    send_forbidden(conn, "Download limit reached")
+  end
+
+  defp handle_token_error(conn, :record_limit_reached, _client_ip) do
+    Logger.warning("Sync: Record limit reached")
+    send_forbidden(conn, "Record limit reached")
+  end
+
+  defp handle_token_error(conn, :ip_not_allowed, client_ip) do
+    Logger.warning("Sync: IP not in whitelist: #{client_ip}")
+    send_forbidden(conn, "IP not allowed")
+  end
+
+  defp handle_token_error(conn, :outside_allowed_hours, _client_ip) do
+    Logger.warning("Sync: Connection outside allowed hours")
+    send_forbidden(conn, "Outside allowed hours")
   end
 
   defp extract_connection_info(conn) do

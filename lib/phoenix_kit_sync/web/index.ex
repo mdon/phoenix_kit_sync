@@ -10,10 +10,10 @@ defmodule PhoenixKitSync.Web.Index do
   use PhoenixKitWeb, :live_view
   use Gettext, backend: PhoenixKitWeb.Gettext
 
-  alias PhoenixKitSync
-  alias PhoenixKitSync.Connections
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
+  alias PhoenixKitSync
+  alias PhoenixKitSync.Connections
 
   @impl true
   def mount(params, _session, socket) do

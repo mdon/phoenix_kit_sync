@@ -192,11 +192,7 @@ defmodule PhoenixKitSync.Workers.ImportWorker do
         records
         |> Enum.chunk_every(batch_size)
         |> Enum.with_index()
-        |> Enum.map(fn {batch, index} ->
-          opts = [batch_index: index]
-          opts = if schema, do: Keyword.put(opts, :schema, schema), else: opts
-          create_job(table, batch, strategy, session_code, opts)
-        end)
+        |> Enum.map(&build_batch_job(&1, table, strategy, schema, session_code))
       end)
 
     # Insert all jobs
@@ -218,6 +214,12 @@ defmodule PhoenixKitSync.Workers.ImportWorker do
     else
       {:error, {:some_jobs_failed, length(errors)}}
     end
+  end
+
+  defp build_batch_job({batch, index}, table, strategy, schema, session_code) do
+    opts = [batch_index: index]
+    opts = if schema, do: Keyword.put(opts, :schema, schema), else: opts
+    create_job(table, batch, strategy, session_code, opts)
   end
 
   defp normalize_table_info({records, strategy}), do: {records, strategy, nil}

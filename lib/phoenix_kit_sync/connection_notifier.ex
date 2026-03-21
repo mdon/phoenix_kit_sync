@@ -31,11 +31,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   require Logger
 
   alias Ecto.Adapters.SQL
+  alias PhoenixKit.Settings
+  alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKitSync.Connections
   alias PhoenixKitSync.SchemaInspector
   alias PhoenixKitSync.Transfers
-  alias PhoenixKit.Settings
-  alias PhoenixKit.Utils.Date, as: UtilsDate
 
   @default_timeout 30_000
   @connect_timeout 10_000
@@ -214,40 +214,44 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     if is_nil(site_url) or is_nil(auth_token_hash) do
       {:error, :missing_connection_info}
     else
-      api_url = build_delete_url(site_url)
-      our_url = get_our_site_url()
+      do_notify_delete(site_url, auth_token_hash, timeout)
+    end
+  end
 
-      body = %{
-        "sender_url" => our_url,
-        "auth_token_hash" => auth_token_hash
-      }
+  defp do_notify_delete(site_url, auth_token_hash, timeout) do
+    api_url = build_delete_url(site_url)
+    our_url = get_our_site_url()
 
-      Logger.info("Sync: Notifying remote site to delete connection", %{
-        remote_url: site_url,
-        api_url: api_url
-      })
+    body = %{
+      "sender_url" => our_url,
+      "auth_token_hash" => auth_token_hash
+    }
 
-      case make_http_request(api_url, body, timeout) do
-        {:ok, %{status: status}} when status in [200, 204] ->
-          Logger.info("Sync: Remote site deleted connection successfully")
-          {:ok, :deleted}
+    Logger.info("Sync: Notifying remote site to delete connection", %{
+      remote_url: site_url,
+      api_url: api_url
+    })
 
-        {:ok, %{status: 404}} ->
-          Logger.info("Sync: Connection not found on remote site (already deleted)")
-          {:ok, :not_found}
+    case make_http_request(api_url, body, timeout) do
+      {:ok, %{status: status}} when status in [200, 204] ->
+        Logger.info("Sync: Remote site deleted connection successfully")
+        {:ok, :deleted}
 
-        {:ok, %{status: status, body: resp_body}} ->
-          Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
-          {:error, {:unexpected_status, status}}
+      {:ok, %{status: 404}} ->
+        Logger.info("Sync: Connection not found on remote site (already deleted)")
+        {:ok, :not_found}
 
-        {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
-          Logger.info("Sync: Remote site offline, connection will self-heal")
-          {:ok, :offline}
+      {:ok, %{status: status, body: resp_body}} ->
+        Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
+        {:error, {:unexpected_status, status}}
 
-        {:error, reason} ->
-          Logger.error("Sync: Failed to notify delete: #{inspect(reason)}")
-          {:error, reason}
-      end
+      {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
+        Logger.info("Sync: Remote site offline, connection will self-heal")
+        {:ok, :offline}
+
+      {:error, reason} ->
+        Logger.error("Sync: Failed to notify delete: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -280,41 +284,45 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     if is_nil(site_url) or is_nil(auth_token_hash) do
       {:error, :missing_connection_info}
     else
-      api_url = build_status_change_url(site_url)
-      our_url = get_our_site_url()
+      do_notify_status_change(site_url, auth_token_hash, new_status, timeout)
+    end
+  end
 
-      body = %{
-        "sender_url" => our_url,
-        "auth_token_hash" => auth_token_hash,
-        "status" => new_status
-      }
+  defp do_notify_status_change(site_url, auth_token_hash, new_status, timeout) do
+    api_url = build_status_change_url(site_url)
+    our_url = get_our_site_url()
 
-      Logger.info("Sync: Notifying remote site of status change", %{
-        remote_url: site_url,
-        new_status: new_status
-      })
+    body = %{
+      "sender_url" => our_url,
+      "auth_token_hash" => auth_token_hash,
+      "status" => new_status
+    }
 
-      case make_http_request(api_url, body, timeout) do
-        {:ok, %{status: status}} when status in [200, 204] ->
-          Logger.info("Sync: Remote site updated status successfully")
-          {:ok, :updated}
+    Logger.info("Sync: Notifying remote site of status change", %{
+      remote_url: site_url,
+      new_status: new_status
+    })
 
-        {:ok, %{status: 404}} ->
-          Logger.info("Sync: Connection not found on remote site")
-          {:ok, :not_found}
+    case make_http_request(api_url, body, timeout) do
+      {:ok, %{status: status}} when status in [200, 204] ->
+        Logger.info("Sync: Remote site updated status successfully")
+        {:ok, :updated}
 
-        {:ok, %{status: status, body: resp_body}} ->
-          Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
-          {:error, {:unexpected_status, status}}
+      {:ok, %{status: 404}} ->
+        Logger.info("Sync: Connection not found on remote site")
+        {:ok, :not_found}
 
-        {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
-          Logger.info("Sync: Remote site offline")
-          {:ok, :offline}
+      {:ok, %{status: status, body: resp_body}} ->
+        Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
+        {:error, {:unexpected_status, status}}
 
-        {:error, reason} ->
-          Logger.error("Sync: Failed to notify status change: #{inspect(reason)}")
-          {:error, reason}
-      end
+      {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
+        Logger.info("Sync: Remote site offline")
+        {:ok, :offline}
+
+      {:error, reason} ->
+        Logger.error("Sync: Failed to notify status change: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -396,31 +404,35 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     if is_nil(site_url) or is_nil(auth_token_hash) do
       {:error, :missing_connection_info}
     else
-      api_url = build_verify_url(site_url)
-      our_url = get_our_site_url()
+      do_verify_connection(site_url, auth_token_hash, timeout)
+    end
+  end
 
-      body = %{
-        "sender_url" => our_url,
-        "auth_token_hash" => auth_token_hash
-      }
+  defp do_verify_connection(site_url, auth_token_hash, timeout) do
+    api_url = build_verify_url(site_url)
+    our_url = get_our_site_url()
 
-      case make_http_request(api_url, body, timeout) do
-        {:ok, %{status: 200}} ->
-          {:ok, :exists}
+    body = %{
+      "sender_url" => our_url,
+      "auth_token_hash" => auth_token_hash
+    }
 
-        {:ok, %{status: 404}} ->
-          {:ok, :not_found}
+    case make_http_request(api_url, body, timeout) do
+      {:ok, %{status: 200}} ->
+        {:ok, :exists}
 
-        {:ok, %{status: _status}} ->
-          # Assume exists if we get any other response
-          {:ok, :exists}
+      {:ok, %{status: 404}} ->
+        {:ok, :not_found}
 
-        {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
-          {:ok, :offline}
+      {:ok, %{status: _status}} ->
+        # Assume exists if we get any other response
+        {:ok, :exists}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
+        {:ok, :offline}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1089,41 +1101,13 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   defp parse_response(%{status: 200, body: body}) do
     case Jason.decode(body) do
       {:ok, %{"success" => true} = data} ->
-        status =
-          case data["connection_status"] do
-            "active" -> :registered
-            "pending" -> :pending
-            _ -> :registered
-          end
-
-        %{
-          success: true,
-          status: status,
-          message: data["message"] || "Connection registered",
-          remote_connection_uuid: data["connection_uuid"] || data["connection_id"],
-          http_status: 200,
-          error: nil
-        }
+        parse_success_response(data)
 
       {:ok, %{"success" => false} = data} ->
-        %{
-          success: false,
-          status: :failed,
-          message: data["error"] || "Remote site rejected connection",
-          remote_connection_uuid: nil,
-          http_status: 200,
-          error: data["error"]
-        }
+        build_error_result(200, data["error"] || "Remote site rejected connection")
 
       _ ->
-        %{
-          success: false,
-          status: :failed,
-          message: "Invalid response from remote site",
-          remote_connection_uuid: nil,
-          http_status: 200,
-          error: "Invalid JSON response"
-        }
+        build_error_result(200, "Invalid JSON response", "Invalid response from remote site")
     end
   end
 
@@ -1192,6 +1176,35 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     }
   end
 
+  defp parse_success_response(data) do
+    status =
+      case data["connection_status"] do
+        "active" -> :registered
+        "pending" -> :pending
+        _ -> :registered
+      end
+
+    %{
+      success: true,
+      status: status,
+      message: data["message"] || "Connection registered",
+      remote_connection_uuid: data["connection_uuid"] || data["connection_id"],
+      http_status: 200,
+      error: nil
+    }
+  end
+
+  defp build_error_result(http_status, error, message \\ nil) do
+    %{
+      success: false,
+      status: :failed,
+      message: message || error,
+      remote_connection_uuid: nil,
+      http_status: http_status,
+      error: error
+    }
+  end
+
   defp extract_error(body, default) do
     case Jason.decode(body) do
       {:ok, %{"error" => error}} -> error
@@ -1251,21 +1264,8 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     results =
       Enum.reduce(data, %{imported: 0, skipped: 0, errors: 0, error_sample: nil}, fn record,
                                                                                      acc ->
-        case insert_record(repo, table_name, record, conflict_strategy) do
-          :ok ->
-            %{acc | imported: acc.imported + 1}
-
-          :skipped ->
-            %{acc | skipped: acc.skipped + 1}
-
-          {:error, reason} ->
-            # Keep only first error as sample
-            acc = if is_nil(acc.error_sample), do: %{acc | error_sample: reason}, else: acc
-            %{acc | errors: acc.errors + 1}
-
-          :error ->
-            %{acc | errors: acc.errors + 1}
-        end
+        insert_record(repo, table_name, record, conflict_strategy)
+        |> accumulate_import_result(acc)
       end)
 
     Logger.info(
@@ -1357,20 +1357,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
       :import ->
         remapped_record = apply_fk_remap(record, ctx.fk_columns, remap)
 
-        case insert_record(ctx.repo, ctx.table_name, remapped_record, ctx.conflict_strategy) do
-          :ok ->
-            {%{acc | imported: acc.imported + 1}, remap}
+        updated_acc =
+          insert_record(ctx.repo, ctx.table_name, remapped_record, ctx.conflict_strategy)
+          |> accumulate_import_result(acc)
 
-          :skipped ->
-            {%{acc | skipped: acc.skipped + 1}, remap}
-
-          {:error, reason} ->
-            acc = if is_nil(acc.error_sample), do: %{acc | error_sample: reason}, else: acc
-            {%{acc | errors: acc.errors + 1}, remap}
-
-          :error ->
-            {%{acc | errors: acc.errors + 1}, remap}
-        end
+        {updated_acc, remap}
     end
   end
 
@@ -1458,25 +1449,34 @@ defmodule PhoenixKitSync.ConnectionNotifier do
 
   defp apply_fk_remap(record, fk_columns, remap) do
     Enum.reduce(fk_columns, record, fn %{column: col, referenced_table: ref_table}, rec ->
-      fk_value = get_record_field(rec, col)
-
-      if fk_value && is_binary(fk_value) do
-        remap_key = {ref_table, fk_value}
-
-        case Map.get(remap, remap_key) do
-          nil ->
-            rec
-
-          local_value ->
-            # Replace the FK value with the local one — normalize to string key
-            rec = put_record_field(rec, col, local_value)
-            Logger.debug("Sync: Remapped #{col}: #{fk_value} → #{local_value}")
-            rec
-        end
-      else
-        rec
-      end
+      remap_single_fk(rec, col, ref_table, remap)
     end)
+  end
+
+  defp remap_single_fk(rec, col, ref_table, remap) do
+    fk_value = get_record_field(rec, col)
+
+    if fk_value && is_binary(fk_value) do
+      case Map.get(remap, {ref_table, fk_value}) do
+        nil ->
+          rec
+
+        local_value ->
+          Logger.debug("Sync: Remapped #{col}: #{fk_value} → #{local_value}")
+          put_record_field(rec, col, local_value)
+      end
+    else
+      rec
+    end
+  end
+
+  defp accumulate_import_result(:ok, acc), do: %{acc | imported: acc.imported + 1}
+  defp accumulate_import_result(:skipped, acc), do: %{acc | skipped: acc.skipped + 1}
+  defp accumulate_import_result(:error, acc), do: %{acc | errors: acc.errors + 1}
+
+  defp accumulate_import_result({:error, reason}, acc) do
+    acc = if is_nil(acc.error_sample), do: %{acc | error_sample: reason}, else: acc
+    %{acc | errors: acc.errors + 1}
   end
 
   defp insert_record(repo, table_name, record, conflict_strategy) when is_map(record) do
@@ -1501,27 +1501,26 @@ defmodule PhoenixKitSync.ConnectionNotifier do
       |> Enum.map_join(", ", fn {_col, idx} -> "$#{idx}" end)
 
     columns_str = Enum.map_join(columns, ", ", &~s["#{&1}"])
-
-    on_conflict =
-      case conflict_strategy do
-        "skip" ->
-          "ON CONFLICT DO NOTHING"
-
-        "overwrite" ->
-          ~s[ON CONFLICT ("#{pk_col}") DO UPDATE SET #{build_update_clause(columns, pk_col)}]
-
-        "merge" ->
-          "ON CONFLICT DO NOTHING"
-
-        "append" ->
-          ""
-
-        _ ->
-          "ON CONFLICT DO NOTHING"
-      end
+    on_conflict = build_on_conflict_clause(conflict_strategy, pk_col, columns)
 
     sql = ~s[INSERT INTO "#{table_name}" (#{columns_str}) VALUES (#{placeholders}) #{on_conflict}]
 
+    execute_insert(repo, sql, values)
+  rescue
+    e ->
+      {:error, Exception.message(e)}
+  end
+
+  defp insert_record(_repo, _table_name, _record, _strategy), do: :error
+
+  defp build_on_conflict_clause("overwrite", pk_col, columns) do
+    ~s[ON CONFLICT ("#{pk_col}") DO UPDATE SET #{build_update_clause(columns, pk_col)}]
+  end
+
+  defp build_on_conflict_clause("append", _pk_col, _columns), do: ""
+  defp build_on_conflict_clause(_strategy, _pk_col, _columns), do: "ON CONFLICT DO NOTHING"
+
+  defp execute_insert(repo, sql, values) do
     case SQL.query(repo, sql, values) do
       {:ok, %{num_rows: 1}} ->
         :ok
@@ -1535,12 +1534,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
       {:error, error} ->
         {:error, inspect(error)}
     end
-  rescue
-    e ->
-      {:error, Exception.message(e)}
   end
-
-  defp insert_record(_repo, _table_name, _record, _strategy), do: :error
 
   defp build_update_clause(columns, pk_col) do
     columns
