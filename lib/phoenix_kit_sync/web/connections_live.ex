@@ -226,7 +226,25 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   end
 
   defp handle_verification_result({:ok, :not_found}, conn_uuid, pid) do
+    Logger.warning(
+      "[Sync.Connections] Verify returned not_found for connection #{conn_uuid}"
+    )
+
     send(pid, {:receiver_connection_severed, conn_uuid})
+  end
+
+  defp handle_verification_result({:ok, :offline}, conn_uuid, _pid) do
+    Logger.debug(
+      "[Sync.Connections] Remote site offline during verify | uuid=#{conn_uuid}"
+    )
+  end
+
+  defp handle_verification_result({:error, reason}, conn_uuid, _pid) do
+    Logger.warning(
+      "[Sync.Connections] Verify failed for connection #{conn_uuid} | error=#{inspect(reason)}"
+    )
+
+    # Don't trigger severed on errors — could be transient network issue or hot reload
   end
 
   defp handle_verification_result(_result, _conn_uuid, _pid), do: :ok
@@ -951,18 +969,34 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   end
 
   def handle_info({:receiver_connection_severed, connection_uuid}, socket) do
-    # Receiver severed their connection - delete our sender connection
+    # Receiver reports connection not found on their side.
+    # Instead of auto-deleting (which can cascade on shared-DB setups or
+    # during hot reloads), suspend the connection so the admin can investigate.
     case Connections.get_connection(connection_uuid) do
       nil ->
-        # Already deleted
+        {:noreply, socket}
+
+      %{status: "suspended"} ->
+        # Already suspended, don't re-suspend
         {:noreply, socket}
 
       connection ->
-        case Connections.delete_connection(connection) do
+        Logger.warning(
+          "[Sync.Connections] Remote site reports connection not found, suspending " <>
+            "| uuid=#{connection.uuid} " <>
+            "| name=#{inspect(connection.name)} " <>
+            "| site_url=#{connection.site_url}"
+        )
+
+        case Connections.suspend_connection(connection, nil, "Remote site reports connection not found") do
           {:ok, _} ->
             socket =
               socket
-              |> put_flash(:info, "Connection '#{connection.name}' was severed by remote site")
+              |> put_flash(
+                :warning,
+                "Connection '#{connection.name}' suspended — remote site reports it no longer exists. " <>
+                  "You can delete it or reactivate and re-verify."
+              )
               |> load_connections()
 
             {:noreply, socket}
