@@ -989,7 +989,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     end
   end
 
-  defp get_our_site_url do
+  @doc """
+  Resolves this site's own URL from Settings, config, or dynamic detection.
+  Used to identify ourselves when communicating with remote sites.
+  """
+  def get_our_site_url do
     case Settings.get_setting("site_url", nil) do
       nil ->
         url = get_our_site_url_fallback()
