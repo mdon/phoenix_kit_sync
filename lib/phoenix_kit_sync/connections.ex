@@ -56,6 +56,17 @@ defmodule PhoenixKitSync.Connections do
   alias PhoenixKitSync.ConnectionNotifier
 
   # ===========================================
+  # PUBSUB BROADCASTING
+  # ===========================================
+
+  defp broadcast(event) do
+    case PhoenixKit.Config.pubsub_server() do
+      nil -> :ok
+      pubsub -> Phoenix.PubSub.broadcast(pubsub, "sync:connections", event)
+    end
+  end
+
+  # ===========================================
   # CRUD OPERATIONS
   # ===========================================
 
@@ -129,6 +140,7 @@ defmodule PhoenixKitSync.Connections do
               "| status=#{connection.status}"
           )
 
+          broadcast({:connection_created, connection.uuid})
           {:ok, connection, token}
 
         {:error, changeset} ->
@@ -295,6 +307,12 @@ defmodule PhoenixKitSync.Connections do
           )
         end
 
+        if :status in changed_fields or "status" in changed_fields do
+          broadcast({:connection_status_changed, updated.uuid, updated.status})
+        else
+          broadcast({:connection_updated, updated.uuid})
+        end
+
       {:error, changeset} ->
         Logger.warning(
           "[Sync.Connections] Failed to update connection " <>
@@ -321,7 +339,15 @@ defmodule PhoenixKitSync.Connections do
     )
 
     repo = RepoHelper.repo()
-    repo.delete(connection)
+
+    case repo.delete(connection) do
+      {:ok, deleted} ->
+        broadcast({:connection_deleted, deleted.uuid})
+        {:ok, deleted}
+
+      error ->
+        error
+    end
   end
 
   # ===========================================
@@ -351,9 +377,14 @@ defmodule PhoenixKitSync.Connections do
 
     repo = RepoHelper.repo()
 
-    connection
-    |> Connection.approve_changeset(admin_user_uuid)
-    |> repo.update()
+    case connection |> Connection.approve_changeset(admin_user_uuid) |> repo.update() do
+      {:ok, updated} ->
+        broadcast({:connection_status_changed, updated.uuid, "active"})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -381,9 +412,14 @@ defmodule PhoenixKitSync.Connections do
 
     repo = RepoHelper.repo()
 
-    connection
-    |> Connection.suspend_changeset(admin_user_uuid, reason)
-    |> repo.update()
+    case connection |> Connection.suspend_changeset(admin_user_uuid, reason) |> repo.update() do
+      {:ok, updated} ->
+        broadcast({:connection_status_changed, updated.uuid, "suspended"})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -411,9 +447,14 @@ defmodule PhoenixKitSync.Connections do
 
     repo = RepoHelper.repo()
 
-    connection
-    |> Connection.revoke_changeset(admin_user_uuid, reason)
-    |> repo.update()
+    case connection |> Connection.revoke_changeset(admin_user_uuid, reason) |> repo.update() do
+      {:ok, updated} ->
+        broadcast({:connection_status_changed, updated.uuid, "revoked"})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -433,9 +474,14 @@ defmodule PhoenixKitSync.Connections do
 
     repo = RepoHelper.repo()
 
-    connection
-    |> Connection.reactivate_changeset()
-    |> repo.update()
+    case connection |> Connection.reactivate_changeset() |> repo.update() do
+      {:ok, updated} ->
+        broadcast({:connection_status_changed, updated.uuid, "active"})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   # ===========================================

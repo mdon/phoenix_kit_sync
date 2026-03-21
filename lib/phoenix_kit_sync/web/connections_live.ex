@@ -984,6 +984,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     {:noreply, load_connections(socket, skip_async: true)}
   end
 
+  def handle_info({:connection_deleted, _connection_uuid}, socket) do
+    {:noreply, load_connections(socket, skip_async: true)}
+  end
+
+  def handle_info({:connection_updated, _connection_uuid}, socket) do
+    {:noreply, load_connections(socket, skip_async: true)}
+  end
+
   defp extract_sync_counts(result) do
     case result do
       {:ok, %{imported: imported, skipped: skipped, errors: errors}} ->
