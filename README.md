@@ -1,6 +1,6 @@
 # PhoenixKitSync
 
-Peer-to-peer data sync module for [PhoenixKit](https://github.com/mdon/phoenix_kit).
+Peer-to-peer data sync module for [PhoenixKit](https://github.com/BeamLabEU/phoenix_kit).
 
 Provides bidirectional data synchronization between PhoenixKit instances —
 sync between dev and prod, dev and dev, or different websites entirely.
