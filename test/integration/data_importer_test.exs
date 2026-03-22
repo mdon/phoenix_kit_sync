@@ -63,7 +63,10 @@ defmodule PhoenixKitSync.Integration.DataImporterTest do
       id = existing["id"]
 
       # Try to import a record with the same primary key
-      duplicate = [%{"id" => id, "name" => "Alice Updated", "email" => "new@example.com", "age" => 99}]
+      duplicate = [
+        %{"id" => id, "name" => "Alice Updated", "email" => "new@example.com", "age" => 99}
+      ]
+
       assert {:ok, result} = DataImporter.import_records(@test_table, duplicate, :skip)
       assert result.skipped == 1
       assert result.created == 0
@@ -86,8 +89,18 @@ defmodule PhoenixKitSync.Integration.DataImporterTest do
       [existing] = fetch_all_rows()
       id = existing["id"]
 
-      overwrite_records = [%{"id" => id, "name" => "Alice Overwritten", "email" => "overwritten@example.com", "age" => 99}]
-      assert {:ok, result} = DataImporter.import_records(@test_table, overwrite_records, :overwrite)
+      overwrite_records = [
+        %{
+          "id" => id,
+          "name" => "Alice Overwritten",
+          "email" => "overwritten@example.com",
+          "age" => 99
+        }
+      ]
+
+      assert {:ok, result} =
+               DataImporter.import_records(@test_table, overwrite_records, :overwrite)
+
       assert result.updated == 1
       assert result.created == 0
 
@@ -149,7 +162,10 @@ defmodule PhoenixKitSync.Integration.DataImporterTest do
       id = existing["id"]
 
       # Append with the same id - should create a new record with a different id
-      append_records = [%{"id" => id, "name" => "Alice Copy", "email" => "copy@example.com", "age" => 30}]
+      append_records = [
+        %{"id" => id, "name" => "Alice Copy", "email" => "copy@example.com", "age" => 30}
+      ]
+
       assert {:ok, result} = DataImporter.import_records(@test_table, append_records, :append)
       assert result.created == 1
 
@@ -196,7 +212,9 @@ defmodule PhoenixKitSync.Integration.DataImporterTest do
   describe "error handling" do
     test "returns error for nonexistent table" do
       records = [%{"name" => "Test"}]
-      assert {:error, _reason} = DataImporter.import_records("nonexistent_table_xyz", records, :skip)
+
+      assert {:error, _reason} =
+               DataImporter.import_records("nonexistent_table_xyz", records, :skip)
     end
   end
 

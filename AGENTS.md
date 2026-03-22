@@ -138,6 +138,10 @@ lib/phoenix_kit_sync/
 - **LiveViews use `Phoenix.LiveView` directly** — do not use `PhoenixKitWeb` macros (`use PhoenixKitWeb, :live_view`) in this standalone package; import helpers explicitly
 - **SQL identifier safety** — always validate table/column names with `valid_identifier?/1` and quote with `quote_identifier/1` before using in raw SQL
 - **`Connection.ip_allowed?/2` quirk** — when `ip_whitelist` is empty (allow all), calling `ip_allowed?(conn, "127.0.0.1")` returns `false` because the 2-arity clause doesn't match the empty-list guard. The 1-arity `ip_allowed?(conn)` works correctly. Callers like `Connections.validate_connection/2` pass `nil` as IP to avoid this
+- **Self-connection protection** — `Connections.create_connection/1` rejects sender connections to the site's own URL (with port/scheme/case normalization). Only applies to direction `"sender"` — receivers (API-created) are always allowed
+- **PubSub broadcasts from context** — all state-changing operations in `Connections` broadcast via PubSub (`:connection_created`, `:connection_deleted`, `:connection_status_changed`, `:connection_updated`). Don't add duplicate broadcasts in controllers or LiveViews
+- **Decimal values in sync** — `DataExporter` serializes `Decimal` to strings for JSON. `ConnectionNotifier.prepare_value/1` parses decimal-like strings (e.g., `"0.00"`) back to `Decimal` structs before INSERT. Without this, numeric columns fail with Postgrex type errors
+- **Suggested tables in sync UI** — when tables are selected for sync, tables that reference them via FK are highlighted (not auto-selected) as "suggested". The admin decides whether to include them
 
 ## Testing
 
@@ -178,7 +182,7 @@ test/
 │   ├── import_worker_test.exs       # Oban job changeset building
 │   └── paths_test.exs              # URL path helpers
 └── integration/                     # Integration tests (needs DB)
-    ├── connections_test.exs         # Connections context CRUD + validation
+    ├── connections_test.exs         # Connections CRUD, validation, PubSub, self-connection
     ├── transfers_test.exs           # Transfer lifecycle + approval workflow
     ├── migration_test.exs           # Table structure verification
     ├── schema_inspector_test.exs    # Table listing, schema, checksums

@@ -71,7 +71,10 @@ defmodule PhoenixKitSync.Integration.DataExporterTest do
       _conn3 = create_test_connection()
 
       assert {:ok, all_records} = DataExporter.fetch_records("phoenix_kit_sync_connections")
-      assert {:ok, offset_records} = DataExporter.fetch_records("phoenix_kit_sync_connections", offset: 1)
+
+      assert {:ok, offset_records} =
+               DataExporter.fetch_records("phoenix_kit_sync_connections", offset: 1)
+
       assert length(offset_records) == length(all_records) - 1
     end
   end

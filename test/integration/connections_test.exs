@@ -142,7 +142,9 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       conn = create_connection()
       {:ok, active} = Connections.approve_connection(conn, UUIDv7.generate())
 
-      assert {:ok, revoked} = Connections.revoke_connection(active, UUIDv7.generate(), "Decommissioned")
+      assert {:ok, revoked} =
+               Connections.revoke_connection(active, UUIDv7.generate(), "Decommissioned")
+
       assert revoked.status == "revoked"
       assert revoked.revoked_reason == "Decommissioned"
     end
@@ -317,7 +319,8 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
         Connections.create_connection(%{
           "name" => "Different Site",
           "direction" => "sender",
-          "site_url" => "https://completely-different-site-#{System.unique_integer([:positive])}.example.com"
+          "site_url" =>
+            "https://completely-different-site-#{System.unique_integer([:positive])}.example.com"
         })
 
       assert {:ok, _conn, _token} = result
