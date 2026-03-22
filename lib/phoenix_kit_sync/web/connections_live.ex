@@ -2234,7 +2234,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                           <tr class={
                             cond do
                               is_selected -> "bg-primary/10"
-                              is_suggested -> "bg-warning/5 border-l-2 border-warning"
+                              is_suggested -> "bg-warning/10"
                               true -> ""
                             end
                           }>
@@ -2359,6 +2359,19 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                       <.icon name="hero-arrow-down-tray" class="w-4 h-4" />
                       Pull {MapSet.size(@selected_tables)} Table(s)
                     </button>
+                  </div>
+
+                  <div class="text-xs text-base-content/50 mt-3 space-y-1">
+                    <p>
+                      <span class="inline-block w-3 h-3 bg-primary/10 rounded mr-1 align-middle"></span>
+                      <span class="font-semibold">Selected</span>
+                      — tables that will be synced. Dependencies (via foreign keys) are auto-selected.
+                    </p>
+                    <p>
+                      <span class="inline-block w-3 h-3 bg-warning/10 rounded mr-1 align-middle"></span>
+                      <span class="font-semibold">Suggested</span>
+                      — tables that reference selected tables. Consider including them for data to function correctly.
+                    </p>
                   </div>
                 <% end %>
               <% end %>
