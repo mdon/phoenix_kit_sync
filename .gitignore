@@ -24,3 +24,9 @@ phoenix_kit_sync-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# no logs
+*.log
+
+# no expert files
+.expert/
