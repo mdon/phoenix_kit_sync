@@ -219,13 +219,27 @@ PR reviews are stored in `dev_docs/pull_requests/` and tracked in version contro
 ### Structure
 
 ```
-dev_docs/pull_requests/<year>/<pr_number>-<slug>/CLAUDE_REVIEW.md
+dev_docs/pull_requests/<year>/<pr_number>-<slug>/{AGENT}_REVIEW.md
 ```
 
 - **`<year>`** — year the PR was created (e.g., `2026`)
 - **`<pr_number>`** — GitHub PR number (e.g., `1`)
 - **`<slug>`** — short kebab-case summary from the PR title (e.g., `sync-module-extraction`)
-- **`CLAUDE_REVIEW.md`** — the review file, always named `CLAUDE_REVIEW.md`
+- **`{AGENT}_REVIEW.md`** — review file named after the reviewing agent (e.g., `CLAUDE_REVIEW.md`, `GEMINI_REVIEW.md`, `KIMI_REVIEW.md`)
+
+> **⚠️ Use YOUR OWN agent name:** If you are Kimi, use `KIMI_REVIEW.md`. If you are Claude, use `CLAUDE_REVIEW.md`. Never use another agent's name for your own review — each agent's reviews must be clearly attributable.
+
+### Naming Rules for Multiple Reviews
+
+When multiple agents review the same PR, each creates their own file:
+```
+dev_docs/pull_requests/2026/1-sync-module-extraction/
+├── CLAUDE_REVIEW.md      # Claude's review
+├── GEMINI_REVIEW.md      # Gemini's review
+└── README.md
+```
+
+**Same agent, multiple reviews:** If the same agent reviews a PR multiple times (e.g., initial review + post-merge follow-up), append findings to the existing `{AGENT}_REVIEW.md` with a clear header, or use `FOLLOW_UP.md` for post-merge discoveries. Do NOT create files like `CLAUDE_REVIEW_2.md` — the `{AGENT}` prefix must match exactly and remain unique per agent.
 
 ### Review file format
 
