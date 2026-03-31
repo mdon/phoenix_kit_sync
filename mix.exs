@@ -38,7 +38,7 @@ defmodule PhoenixKitSync.MixProject do
 
   defp deps do
     [
-      {:phoenix_kit, path: "../phoenix_kit"},
+      {:phoenix_kit, "~> 1.7"},
       {:phoenix_live_view, "~> 1.1"},
       {:phoenix, "~> 1.8.1"},
       {:ecto_sql, "~> 3.10"},
