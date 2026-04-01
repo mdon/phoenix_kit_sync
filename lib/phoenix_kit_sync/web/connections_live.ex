@@ -2747,27 +2747,6 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   # HELPER COMPONENTS
   # ===========================================
 
-  defp status_badge(assigns) do
-    {color, label} = status_badge_style(assigns.status)
-    assigns = assigns |> assign(:color, color) |> assign(:label, label)
-
-    ~H"""
-    <span class={"badge badge-sm #{@color}"}>
-      {@label}
-    </span>
-    """
-  end
-
-  defp status_badge_style("pending"), do: {"badge-warning", "Pending"}
-  defp status_badge_style("active"), do: {"badge-success", "Active"}
-  defp status_badge_style("suspended"), do: {"badge-error", "Suspended"}
-  defp status_badge_style("revoked"), do: {"badge-ghost", "Revoked"}
-  defp status_badge_style("expired"), do: {"badge-ghost", "Expired"}
-  defp status_badge_style("loading"), do: {"badge-ghost animate-pulse", "Loading..."}
-  defp status_badge_style("offline"), do: {"badge-warning", "Sender Offline"}
-  defp status_badge_style("not_found"), do: {"badge-error", "Not Found"}
-  defp status_badge_style("error"), do: {"badge-error", "Error"}
-  defp status_badge_style(status), do: {"badge-ghost", String.capitalize(to_string(status))}
 
   # ===========================================
   # HELPER FUNCTIONS

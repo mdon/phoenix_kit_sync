@@ -443,29 +443,6 @@ defmodule PhoenixKitSync.Web.History do
     """
   end
 
-  @status_colors %{
-    "pending" => "badge-ghost",
-    "pending_approval" => "badge-warning",
-    "approved" => "badge-info",
-    "denied" => "badge-error",
-    "in_progress" => "badge-info",
-    "completed" => "badge-success",
-    "failed" => "badge-error",
-    "cancelled" => "badge-ghost",
-    "expired" => "badge-ghost"
-  }
-
-  defp status_badge(assigns) do
-    color = Map.get(@status_colors, assigns.status, "badge-ghost")
-    assigns = assign(assigns, :color, color)
-
-    ~H"""
-    <span class={"badge badge-sm #{@color}"}>
-      {String.replace(@status, "_", " ") |> String.capitalize()}
-    </span>
-    """
-  end
-
   defp record_counts(assigns) do
     ~H"""
     <div class="text-sm">
