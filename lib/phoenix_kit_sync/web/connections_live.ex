@@ -1432,17 +1432,18 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       <%!-- Actions Bar --%>
       <div class="flex justify-between items-center">
         <div class="flex gap-2">
-          <select
-            class="select select-sm"
-            phx-change="filter"
-            name="direction"
-          >
-            <option value="" selected={@direction_filter == nil}>All Connections</option>
-            <option value="sender" selected={@direction_filter == "sender"}>Outgoing Only</option>
-            <option value="receiver" selected={@direction_filter == "receiver"}>
-              Incoming Only
-            </option>
-          </select>
+          <label class="select select-sm">
+            <select
+              phx-change="filter"
+              name="direction"
+            >
+              <option value="" selected={@direction_filter == nil}>All Connections</option>
+              <option value="sender" selected={@direction_filter == "sender"}>Outgoing Only</option>
+              <option value="receiver" selected={@direction_filter == "receiver"}>
+                Incoming Only
+              </option>
+            </select>
+          </label>
         </div>
         <button type="button" phx-click="new_connection" class="btn btn-primary btn-sm">
           <.icon name="hero-plus" class="w-4 h-4" /> New Connection
@@ -1733,35 +1734,36 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
             <div>
               <label class="block text-sm font-medium mb-2">Default Conflict Strategy</label>
-              <select
-                name="connection[default_conflict_strategy]"
-                class="select w-full"
-              >
-                <option
-                  value="skip"
-                  selected={
-                    Ecto.Changeset.get_field(@changeset, :default_conflict_strategy) == "skip"
-                  }
+              <label class="select w-full">
+                <select
+                  name="connection[default_conflict_strategy]"
                 >
-                  Skip - Don't overwrite existing records
-                </option>
-                <option
-                  value="overwrite"
-                  selected={
-                    Ecto.Changeset.get_field(@changeset, :default_conflict_strategy) == "overwrite"
-                  }
-                >
-                  Overwrite - Replace existing records
-                </option>
-                <option
-                  value="merge"
-                  selected={
-                    Ecto.Changeset.get_field(@changeset, :default_conflict_strategy) == "merge"
-                  }
-                >
-                  Merge - Combine with existing records
-                </option>
-              </select>
+                  <option
+                    value="skip"
+                    selected={
+                      Ecto.Changeset.get_field(@changeset, :default_conflict_strategy) == "skip"
+                    }
+                  >
+                    Skip - Don't overwrite existing records
+                  </option>
+                  <option
+                    value="overwrite"
+                    selected={
+                      Ecto.Changeset.get_field(@changeset, :default_conflict_strategy) == "overwrite"
+                    }
+                  >
+                    Overwrite - Replace existing records
+                  </option>
+                  <option
+                    value="merge"
+                    selected={
+                      Ecto.Changeset.get_field(@changeset, :default_conflict_strategy) == "merge"
+                    }
+                  >
+                    Merge - Combine with existing records
+                  </option>
+                </select>
+              </label>
             </div>
 
             <div class="flex items-center gap-3 mt-4">
@@ -2185,16 +2187,18 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                       class="form-control flex-row items-center gap-2"
                     >
                       <span class="label-text font-semibold text-sm">Conflict:</span>
-                      <select name="strategy" class="select select-sm">
-                        <option value="skip" selected={@conflict_strategy == "skip"}>Skip</option>
-                        <option value="overwrite" selected={@conflict_strategy == "overwrite"}>
-                          Overwrite
-                        </option>
-                        <option value="merge" selected={@conflict_strategy == "merge"}>Merge</option>
-                        <option value="append" selected={@conflict_strategy == "append"}>
-                          Append
-                        </option>
-                      </select>
+                      <label class="select select-sm">
+                        <select name="strategy">
+                          <option value="skip" selected={@conflict_strategy == "skip"}>Skip</option>
+                          <option value="overwrite" selected={@conflict_strategy == "overwrite"}>
+                            Overwrite
+                          </option>
+                          <option value="merge" selected={@conflict_strategy == "merge"}>Merge</option>
+                          <option value="append" selected={@conflict_strategy == "append"}>
+                            Append
+                          </option>
+                        </select>
+                      </label>
                     </form>
                   </div>
 
@@ -2456,17 +2460,19 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                   <label class="label">
                     <span class="label-text font-semibold">Select Table</span>
                   </label>
-                  <select class="select w-full max-w-md" name="table">
-                    <option value="">-- Select a table --</option>
-                    <%= for table <- @tables do %>
-                      <% table_name = if is_map(table), do: get_table_field(table, :name), else: table %>
-                      <% sender_count =
-                        if is_map(table), do: table.row_count || table["row_count"] || 0, else: 0 %>
-                      <option value={table_name} selected={@selected_detail_table == table_name}>
-                        {table_name} ({format_number(sender_count)} records)
-                      </option>
-                    <% end %>
-                  </select>
+                  <label class="select w-full max-w-md">
+                    <select name="table">
+                      <option value="">-- Select a table --</option>
+                      <%= for table <- @tables do %>
+                        <% table_name = if is_map(table), do: get_table_field(table, :name), else: table %>
+                        <% sender_count =
+                          if is_map(table), do: table.row_count || table["row_count"] || 0, else: 0 %>
+                        <option value={table_name} selected={@selected_detail_table == table_name}>
+                          {table_name} ({format_number(sender_count)} records)
+                        </option>
+                      <% end %>
+                    </select>
+                  </label>
                 </form>
 
                 <%= if @selected_detail_table do %>
@@ -2698,18 +2704,20 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                       <label class="label">
                         <span class="label-text font-semibold">Conflict Strategy</span>
                       </label>
-                      <select name="strategy" class="select w-full max-w-xs">
-                        <option value="skip" selected={@conflict_strategy == "skip"}>
-                          Skip existing
-                        </option>
-                        <option value="overwrite" selected={@conflict_strategy == "overwrite"}>
-                          Overwrite
-                        </option>
-                        <option value="merge" selected={@conflict_strategy == "merge"}>Merge</option>
-                        <option value="append" selected={@conflict_strategy == "append"}>
-                          Append
-                        </option>
-                      </select>
+                      <label class="select w-full max-w-xs">
+                        <select name="strategy">
+                          <option value="skip" selected={@conflict_strategy == "skip"}>
+                            Skip existing
+                          </option>
+                          <option value="overwrite" selected={@conflict_strategy == "overwrite"}>
+                            Overwrite
+                          </option>
+                          <option value="merge" selected={@conflict_strategy == "merge"}>Merge</option>
+                          <option value="append" selected={@conflict_strategy == "append"}>
+                            Append
+                          </option>
+                        </select>
+                      </label>
                     </form>
 
                     <div class="flex justify-end">
