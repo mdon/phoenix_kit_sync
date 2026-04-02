@@ -1433,7 +1433,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       <div class="flex justify-between items-center">
         <div class="flex gap-2">
           <select
-            class="select select-bordered select-sm"
+            class="select select-sm"
             phx-change="filter"
             name="direction"
           >
@@ -1735,7 +1735,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               <label class="block text-sm font-medium mb-2">Default Conflict Strategy</label>
               <select
                 name="connection[default_conflict_strategy]"
-                class="select select-bordered w-full"
+                class="select w-full"
               >
                 <option
                   value="skip"
@@ -2185,7 +2185,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                       class="form-control flex-row items-center gap-2"
                     >
                       <span class="label-text font-semibold text-sm">Conflict:</span>
-                      <select name="strategy" class="select select-bordered select-sm">
+                      <select name="strategy" class="select select-sm">
                         <option value="skip" selected={@conflict_strategy == "skip"}>Skip</option>
                         <option value="overwrite" selected={@conflict_strategy == "overwrite"}>
                           Overwrite
@@ -2456,7 +2456,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                   <label class="label">
                     <span class="label-text font-semibold">Select Table</span>
                   </label>
-                  <select class="select select-bordered w-full max-w-md" name="table">
+                  <select class="select w-full max-w-md" name="table">
                     <option value="">-- Select a table --</option>
                     <%= for table <- @tables do %>
                       <% table_name = if is_map(table), do: get_table_field(table, :name), else: table %>
@@ -2698,7 +2698,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                       <label class="label">
                         <span class="label-text font-semibold">Conflict Strategy</span>
                       </label>
-                      <select name="strategy" class="select select-bordered w-full max-w-xs">
+                      <select name="strategy" class="select w-full max-w-xs">
                         <option value="skip" selected={@conflict_strategy == "skip"}>
                           Skip existing
                         </option>

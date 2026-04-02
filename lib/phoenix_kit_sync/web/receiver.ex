@@ -1270,7 +1270,7 @@ defmodule PhoenixKitSync.Web.Receiver do
           </h3>
 
           <form phx-change="select_detail_table" class="form-control">
-            <select class="select select-bordered w-full" name="table">
+            <select class="select w-full" name="table">
               <option value="">Choose a table...</option>
               <%= for table <- @tables do %>
                 <% sender_count = table["estimated_count"] || 0 %>

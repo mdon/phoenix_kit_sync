@@ -248,7 +248,7 @@ defmodule PhoenixKitSync.Web.History do
                   <span class="label-text">Direction</span>
                 </label>
                 <select
-                  class="select select-bordered select-sm"
+                  class="select select-sm"
                   phx-change="filter"
                   name="direction"
                 >
@@ -263,7 +263,7 @@ defmodule PhoenixKitSync.Web.History do
                   <span class="label-text">Status</span>
                 </label>
                 <select
-                  class="select select-bordered select-sm"
+                  class="select select-sm"
                   phx-change="filter"
                   name="status"
                 >
