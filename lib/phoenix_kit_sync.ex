@@ -150,6 +150,9 @@ defmodule PhoenixKitSync do
   # ===========================================
 
   @impl PhoenixKit.Module
+  def css_sources, do: [:phoenix_kit_sync]
+
+  @impl PhoenixKit.Module
   def module_key, do: "sync"
 
   @impl PhoenixKit.Module

@@ -247,45 +247,47 @@ defmodule PhoenixKitSync.Web.History do
                 <label class="label">
                   <span class="label-text">Direction</span>
                 </label>
-                <select
-                  class="select select-bordered select-sm"
-                  phx-change="filter"
-                  name="direction"
-                >
-                  <option value="" selected={@direction_filter == nil}>All</option>
-                  <option value="send" selected={@direction_filter == "send"}>Sent</option>
-                  <option value="receive" selected={@direction_filter == "receive"}>Received</option>
-                </select>
+                <label class="select select-sm">
+                  <select
+                    phx-change="filter"
+                    name="direction"
+                  >
+                    <option value="" selected={@direction_filter == nil}>All</option>
+                    <option value="send" selected={@direction_filter == "send"}>Sent</option>
+                    <option value="receive" selected={@direction_filter == "receive"}>Received</option>
+                  </select>
+                </label>
               </div>
 
               <div class="form-control">
                 <label class="label">
                   <span class="label-text">Status</span>
                 </label>
-                <select
-                  class="select select-bordered select-sm"
-                  phx-change="filter"
-                  name="status"
-                >
-                  <option value="" selected={@status_filter == nil}>All</option>
-                  <option value="pending" selected={@status_filter == "pending"}>Pending</option>
-                  <option value="pending_approval" selected={@status_filter == "pending_approval"}>
-                    Pending Approval
-                  </option>
-                  <option value="approved" selected={@status_filter == "approved"}>Approved</option>
-                  <option value="denied" selected={@status_filter == "denied"}>Denied</option>
-                  <option value="in_progress" selected={@status_filter == "in_progress"}>
-                    In Progress
-                  </option>
-                  <option value="completed" selected={@status_filter == "completed"}>
-                    Completed
-                  </option>
-                  <option value="failed" selected={@status_filter == "failed"}>Failed</option>
-                  <option value="cancelled" selected={@status_filter == "cancelled"}>
-                    Cancelled
-                  </option>
-                  <option value="expired" selected={@status_filter == "expired"}>Expired</option>
-                </select>
+                <label class="select select-sm">
+                  <select
+                    phx-change="filter"
+                    name="status"
+                  >
+                    <option value="" selected={@status_filter == nil}>All</option>
+                    <option value="pending" selected={@status_filter == "pending"}>Pending</option>
+                    <option value="pending_approval" selected={@status_filter == "pending_approval"}>
+                      Pending Approval
+                    </option>
+                    <option value="approved" selected={@status_filter == "approved"}>Approved</option>
+                    <option value="denied" selected={@status_filter == "denied"}>Denied</option>
+                    <option value="in_progress" selected={@status_filter == "in_progress"}>
+                      In Progress
+                    </option>
+                    <option value="completed" selected={@status_filter == "completed"}>
+                      Completed
+                    </option>
+                    <option value="failed" selected={@status_filter == "failed"}>Failed</option>
+                    <option value="cancelled" selected={@status_filter == "cancelled"}>
+                      Cancelled
+                    </option>
+                    <option value="expired" selected={@status_filter == "expired"}>Expired</option>
+                  </select>
+                </label>
               </div>
 
               <%= if @direction_filter || @status_filter do %>
@@ -439,29 +441,6 @@ defmodule PhoenixKitSync.Web.History do
       <% else %>
         <.icon name="hero-arrow-down-tray" class="w-3 h-3 mr-1" /> Received
       <% end %>
-    </span>
-    """
-  end
-
-  @status_colors %{
-    "pending" => "badge-ghost",
-    "pending_approval" => "badge-warning",
-    "approved" => "badge-info",
-    "denied" => "badge-error",
-    "in_progress" => "badge-info",
-    "completed" => "badge-success",
-    "failed" => "badge-error",
-    "cancelled" => "badge-ghost",
-    "expired" => "badge-ghost"
-  }
-
-  defp status_badge(assigns) do
-    color = Map.get(@status_colors, assigns.status, "badge-ghost")
-    assigns = assign(assigns, :color, color)
-
-    ~H"""
-    <span class={"badge badge-sm #{@color}"}>
-      {String.replace(@status, "_", " ") |> String.capitalize()}
     </span>
     """
   end
