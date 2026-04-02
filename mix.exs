@@ -2,20 +2,24 @@ defmodule PhoenixKitSync.MixProject do
   use Mix.Project
 
   @version "0.1.0"
+  @description "Peer-to-peer data sync module for PhoenixKit"
+  @source_url "https://github.com/BeamLabEU/phoenix_kit_sync"
 
   def project do
     [
       app: :phoenix_kit_sync,
       version: @version,
+      description: @description,
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
       dialyzer: [plt_add_apps: [:phoenix_kit]],
+      package: package(),
+      docs: docs(),
       name: "PhoenixKitSync",
-      source_url: "https://github.com/BeamLabEU/phoenix_kit_sync",
-      description: "Peer-to-peer data sync module for PhoenixKit"
+      source_url: @source_url
     ]
   end
 
@@ -33,6 +37,26 @@ defmodule PhoenixKitSync.MixProject do
       precommit: ["compile", "quality"],
       "test.setup": ["ecto.create --quiet", "ecto.migrate --quiet"],
       "test.reset": ["ecto.drop --quiet", "test.setup"]
+    ]
+  end
+
+  defp package do
+    [
+      name: "phoenix_kit_sync",
+      maintainers: ["BeamLab EU"],
+      licenses: ["MIT"],
+      links: %{"GitHub" => @source_url},
+      files: ~w(lib docs mix.exs README.md LICENSE)
+    ]
+  end
+
+  defp docs do
+    [
+      name: "PhoenixKitSync",
+      source_ref: "v#{@version}",
+      source_url: @source_url,
+      main: "readme",
+      extras: ["README.md"]
     ]
   end
 

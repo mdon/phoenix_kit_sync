@@ -10,7 +10,7 @@ sync between dev and prod, dev and dev, or different websites entirely.
 Add to your parent app's `mix.exs`:
 
 ```elixir
-{:phoenix_kit_sync, path: "../phoenix_kit_sync"}
+{:phoenix_kit_sync, "~> 0.1"}
 ```
 
 The module is auto-discovered via PhoenixKit's beam scanning — no additional
@@ -240,7 +240,7 @@ Table migrations are currently managed by PhoenixKit's core migration system.
 If the tables don't already exist, this package can create them automatically
 via `PhoenixKitSync.Migration.up/0`.
 
-See [docs/table_structure.md](docs/table_structure.md) for full schema documentation.
+See `docs/table_structure.md` in the source repository for full schema documentation.
 
 ## Future Plans
 

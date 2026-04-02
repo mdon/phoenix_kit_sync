@@ -2755,7 +2755,6 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   # HELPER COMPONENTS
   # ===========================================
 
-
   # ===========================================
   # HELPER FUNCTIONS
   # ===========================================
