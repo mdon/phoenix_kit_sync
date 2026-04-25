@@ -44,6 +44,7 @@ defmodule PhoenixKitSync.Errors do
           | :ip_not_allowed
           | :join_timeout
           | :missing_fields
+          | :table_not_allowed
           | :missing_code
           | :missing_connection_info
           | :module_disabled
@@ -97,6 +98,10 @@ defmodule PhoenixKitSync.Errors do
   def message(:outside_allowed_hours), do: gettext("Outside allowed connection hours")
   def message(:password_required), do: gettext("Password required")
   def message(:record_limit_reached), do: gettext("Record limit reached")
+
+  def message(:table_not_allowed),
+    do: gettext("This connection is not authorised to access that table")
+
   def message(:table_not_found), do: gettext("Table not found")
   def message(:timeout), do: gettext("Request timed out")
   def message(:unauthorized), do: gettext("Unauthorized")

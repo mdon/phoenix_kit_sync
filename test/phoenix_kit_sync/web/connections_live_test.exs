@@ -89,6 +89,25 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
     end
   end
 
+  describe "handle_info catch-all (deep-dive review fix)" do
+    # Pinning test for the missing handle_info catch-all flagged by C12
+    # re-validation. Without this clause, a stray PubSub message or any
+    # unexpected internal signal would crash the LV — losing the admin's
+    # in-progress form input.
+    test "an unexpected message does not crash the LiveView", %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/sync/connections")
+
+      send(view.pid, :unexpected_message_that_should_be_ignored)
+      send(view.pid, {:some, :tuple, :nobody, :handles})
+
+      # If the catch-all is missing, render/1 raises and the assertion
+      # below fails because the LV is dead.
+      assert render(view) =~ "Connections"
+      assert Process.alive?(view.pid)
+    end
+  end
+
   describe "approve pending connection" do
     test "approve button triggers approve_connection and logs activity", %{conn: conn} do
       connection = create_connection(%{"name" => "Pending Approval", "status" => "pending"})

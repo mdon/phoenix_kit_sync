@@ -414,7 +414,17 @@ defmodule PhoenixKitSync.Web.ApiController do
          {:ok, validated} <- validate_list_tables_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
          :ok <- check_connection_active(connection) do
-      tables = get_syncable_tables()
+      # Authorization: even with a valid token, only return tables this
+      # particular connection is allowed to see (excluded_tables blocklist
+      # AND, if set, the allowed_tables allowlist). Without this filter a
+      # leaked token would grant blanket DB access regardless of the
+      # connection's intended scope.
+      tables =
+        get_syncable_tables()
+        |> Enum.filter(fn table ->
+          name = Map.get(table, :name) || Map.get(table, "name")
+          PhoenixKitSync.Connection.table_allowed?(connection, name)
+        end)
 
       # Update last_connected_at
       Connections.update_connection(connection, %{last_connected_at: UtilsDate.utc_now()})
@@ -467,6 +477,7 @@ defmodule PhoenixKitSync.Web.ApiController do
          {:ok, validated} <- validate_pull_data_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
          :ok <- check_connection_active(connection),
+         :ok <- check_table_allowed(connection, validated.table_name),
          {:ok, data} <- fetch_table_data(validated.table_name, connection) do
       # Update connection stats
       record_count = length(data)
@@ -523,6 +534,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         |> put_status(404)
         |> json(%{success: false, error: "Table not found"})
 
+      {:error, :table_not_allowed} ->
+        render_json_error(conn, 403, :table_not_allowed)
+
       {:error, reason} ->
         Logger.error("Failed to pull data", %{reason: inspect(reason)})
 
@@ -548,7 +562,8 @@ defmodule PhoenixKitSync.Web.ApiController do
     with :ok <- check_module_enabled(),
          {:ok, validated} <- validate_schema_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
-         :ok <- check_connection_active(connection) do
+         :ok <- check_connection_active(connection),
+         :ok <- check_table_allowed(connection, validated.table_name) do
       table_name = validated.table_name
 
       # Check if table is in syncable list
@@ -583,6 +598,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         conn
         |> put_status(400)
         |> json(%{success: false, error: "Missing required fields: #{Enum.join(fields, ", ")}"})
+
+      {:error, :table_not_allowed} ->
+        render_json_error(conn, 403, :table_not_allowed)
     end
   end
 
@@ -606,7 +624,8 @@ defmodule PhoenixKitSync.Web.ApiController do
     with :ok <- check_module_enabled(),
          {:ok, validated} <- validate_records_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
-         :ok <- check_connection_active(connection) do
+         :ok <- check_connection_active(connection),
+         :ok <- check_table_allowed(connection, validated.table_name) do
       table_name = validated.table_name
       limit = min(validated.limit, 100)
       offset = validated.offset
@@ -654,6 +673,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         conn
         |> put_status(400)
         |> json(%{success: false, error: "Missing required fields: #{Enum.join(fields, ", ")}"})
+
+      {:error, :table_not_allowed} ->
+        render_json_error(conn, 403, :table_not_allowed)
     end
   end
 
@@ -754,8 +776,17 @@ defmodule PhoenixKitSync.Web.ApiController do
 
         cond do
           is_nil(stored_password) or stored_password == "" ->
-            # No password set but mode requires it - accept for now
-            :ok
+            # Mode requires a password but none is configured. Refuse to
+            # auto-accept (the previous behaviour was a silent bypass —
+            # any registration would succeed if the admin enabled the
+            # mode but forgot to set the password). Require an admin to
+            # complete the configuration before any incoming registration
+            # can proceed.
+            Logger.warning(
+              "[Sync.API] Refusing registration: incoming_mode=require_password but no password is configured"
+            )
+
+            {:error, :password_required}
 
           is_nil(provided_password) or provided_password == "" ->
             {:error, :password_required}
@@ -891,6 +922,18 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
+  # Per-connection table authorization. Even with a valid auth token, a
+  # connection can only access tables that pass its excluded_tables /
+  # allowed_tables filter. Returns `{:error, :table_not_allowed}` so the
+  # action's `with` chain rejects with a 403 (handled in each error case).
+  defp check_table_allowed(connection, table_name) do
+    if PhoenixKitSync.Connection.table_allowed?(connection, table_name) do
+      :ok
+    else
+      {:error, :table_not_allowed}
+    end
+  end
+
   defp get_syncable_tables do
     repo = PhoenixKit.RepoHelper.repo()
 
@@ -926,7 +969,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         []
     end
   rescue
-    _ -> []
+    e ->
+      Logger.error("[Sync.API] get_syncable_tables crashed: #{inspect(e)}")
+      []
   end
 
   defp build_table_info(repo, name, size_bytes, fk_map) do
@@ -960,7 +1005,12 @@ defmodule PhoenixKitSync.Web.ApiController do
       0
     end
   rescue
-    _ -> 0
+    e ->
+      Logger.error(
+        "[Sync.API] get_actual_row_count crashed for #{inspect(table_name)}: #{inspect(e)}"
+      )
+
+      0
   end
 
   defp fetch_table_data(table_name, connection) do

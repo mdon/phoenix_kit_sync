@@ -619,6 +619,38 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       )
     end
 
+    test "regenerate_token logs sync.connection.token_regenerated" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-regen-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _, _new_token} = Connections.regenerate_token(conn, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.token_regenerated",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+
+    test "regenerate_token activity metadata never leaks the new token" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-regen-leak-#{System.unique_integer([:positive])}.com"
+        })
+
+      {:ok, _, new_token} = Connections.regenerate_token(conn)
+
+      entry =
+        assert_activity_logged("sync.connection.token_regenerated", resource_uuid: conn.uuid)
+
+      metadata = entry.metadata || %{}
+      refute Map.has_key?(metadata, "auth_token")
+      refute Map.has_key?(metadata, "auth_token_hash")
+      refute Enum.any?(Map.values(metadata), fn v -> v == new_token end)
+    end
+
     test "metadata never leaks site_url or auth_token_hash" do
       conn =
         create_connection(%{

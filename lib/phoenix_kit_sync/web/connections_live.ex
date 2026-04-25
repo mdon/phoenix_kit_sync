@@ -1036,6 +1036,11 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     {:noreply, load_connections(socket, skip_async: true)}
   end
 
+  # Catch-all so a stray PubSub message or an internal monitor signal can't
+  # crash the LV (which would lose any unsaved form input the admin has
+  # typed). Receiver and Sender LVs both have the same defensive clause.
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   defp extract_sync_counts(result) do
     case result do
       {:ok, %{imported: imported, skipped: skipped, errors: errors}} ->

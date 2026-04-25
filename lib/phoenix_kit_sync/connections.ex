@@ -751,6 +751,14 @@ defmodule PhoenixKitSync.Connections do
         bytes_count: 250000
       })
   """
+  # NOTE: deliberately not activity-logged. record_transfer/2 fires once
+  # per sync batch (potentially many times in a single transfer) and is a
+  # pure stats-counter update. The Transfers context already creates a
+  # `sync_transfer` audit row per batch via Transfers.create_transfer/2,
+  # which carries the same accounting info plus direction/status/timing.
+  # Logging both would flood the activity feed without adding signal.
+  # touch_connected/1 and Transfers.update_progress/2 are excluded for
+  # the same reason.
   @spec record_transfer(Connection.t(), map()) ::
           {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
   def record_transfer(%Connection{} = connection, attrs) do
@@ -936,9 +944,9 @@ defmodule PhoenixKitSync.Connections do
 
       {:ok, conn, new_token} = Connections.regenerate_token(conn)
   """
-  @spec regenerate_token(Connection.t()) ::
+  @spec regenerate_token(Connection.t(), keyword()) ::
           {:ok, Connection.t(), String.t()} | {:error, Ecto.Changeset.t()}
-  def regenerate_token(%Connection{} = connection) do
+  def regenerate_token(%Connection{} = connection, opts \\ []) do
     repo = RepoHelper.repo()
     new_token = Connection.generate_auth_token()
 
@@ -946,8 +954,15 @@ defmodule PhoenixKitSync.Connections do
     |> Connection.changeset(%{auth_token: new_token})
     |> repo.update()
     |> case do
-      {:ok, updated_connection} -> {:ok, updated_connection, new_token}
-      {:error, changeset} -> {:error, changeset}
+      {:ok, updated_connection} ->
+        # Token regeneration is a security-sensitive event — log it. The
+        # raw token never enters metadata; only the fact that a rotation
+        # happened is recorded.
+        log_sync_activity("token_regenerated", updated_connection, opts)
+        {:ok, updated_connection, new_token}
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 
