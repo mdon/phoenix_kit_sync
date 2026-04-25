@@ -61,6 +61,28 @@ repo_available =
       # Run sync migration to create tables via Ecto.Migrator
       Ecto.Migrator.up(TestRepo, 0, PhoenixKitSync.Migration, log: false)
 
+      # Create a minimal phoenix_kit_activities table so
+      # PhoenixKit.Activity.log/1 calls from Connections mutations succeed
+      # without polluting test output with "relation does not exist"
+      # warnings. Shape matches the real schema that core phoenix_kit
+      # migrations build (uuid PK via uuid_generate_v7, JSONB metadata,
+      # timestamps). Without this, every mutation in the suite logged a
+      # warning even though the operation itself succeeded.
+      TestRepo.query!("""
+      CREATE TABLE IF NOT EXISTS phoenix_kit_activities (
+        uuid uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
+        action varchar(255) NOT NULL,
+        module varchar(100),
+        mode varchar(50),
+        actor_uuid uuid,
+        resource_type varchar(100),
+        resource_uuid uuid,
+        target_uuid uuid,
+        metadata jsonb DEFAULT '{}'::jsonb,
+        inserted_at timestamp without time zone DEFAULT NOW()
+      )
+      """)
+
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
     rescue

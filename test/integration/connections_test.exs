@@ -2,6 +2,7 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
   use PhoenixKitSync.DataCase, async: false
 
   alias PhoenixKitSync.Connections
+  alias PhoenixKitSync.Test.Repo, as: TestRepo
 
   @valid_attrs %{
     "name" => "Test Sender",
@@ -514,6 +515,99 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
 
       refute_receive {:connection_updated, _}, 50
       refute_receive {:connection_status_changed, _, _}, 50
+    end
+  end
+
+  describe "activity logging" do
+    # Pinning tests for the C4 audit trail. Each mutation should persist a
+    # `sync.connection.<verb>` row into phoenix_kit_activities with the
+    # connection's uuid as resource_uuid and a safe metadata subset
+    # (name/direction/status — never site_url or auth fields).
+
+    defp activities_for(uuid) do
+      %{rows: rows} =
+        TestRepo.query!(
+          "SELECT action, actor_uuid, resource_uuid, metadata FROM phoenix_kit_activities WHERE resource_uuid = $1 ORDER BY inserted_at",
+          [Ecto.UUID.dump!(uuid)]
+        )
+
+      Enum.map(rows, fn [action, actor, resource, metadata] ->
+        %{
+          action: action,
+          actor_uuid: if(is_binary(actor), do: Ecto.UUID.cast!(actor)),
+          resource_uuid: Ecto.UUID.cast!(resource),
+          metadata: metadata
+        }
+      end)
+    end
+
+    test "create_connection logs sync.connection.created" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-create-#{System.unique_integer([:positive])}.com"
+        })
+
+      assert [entry] = activities_for(conn.uuid)
+      assert entry.action == "sync.connection.created"
+      assert entry.resource_uuid == conn.uuid
+      assert entry.metadata["connection_name"] == conn.name
+      assert entry.metadata["direction"] == "sender"
+      assert entry.metadata["status"] == "pending"
+    end
+
+    test "approve_connection logs sync.connection.approved with actor_uuid" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-approve-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.approve_connection(conn, admin_uuid)
+
+      assert [_created, approved] = activities_for(conn.uuid)
+      assert approved.action == "sync.connection.approved"
+      assert approved.actor_uuid == admin_uuid
+    end
+
+    test "suspend_connection logs sync.connection.suspended with reason" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-suspend-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.suspend_connection(conn, admin_uuid, "Security audit")
+
+      suspended = activities_for(conn.uuid) |> List.last()
+      assert suspended.action == "sync.connection.suspended"
+      assert suspended.actor_uuid == admin_uuid
+      assert suspended.metadata["reason"] == "Security audit"
+    end
+
+    test "delete_connection logs sync.connection.deleted with actor via opts" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-delete-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.delete_connection(conn, actor_uuid: admin_uuid)
+
+      deleted = activities_for(conn.uuid) |> List.last()
+      assert deleted.action == "sync.connection.deleted"
+      assert deleted.actor_uuid == admin_uuid
+    end
+
+    test "metadata never leaks site_url or auth_token_hash" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-leak-check-#{System.unique_integer([:positive])}.com"
+        })
+
+      [entry] = activities_for(conn.uuid)
+      refute entry.metadata["site_url"]
+      refute entry.metadata["auth_token_hash"]
+      refute entry.metadata["auth_token"]
     end
   end
 end

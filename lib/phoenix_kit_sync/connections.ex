@@ -59,6 +59,43 @@ defmodule PhoenixKitSync.Connections do
   # PUBSUB BROADCASTING
   # ===========================================
 
+  # Best-effort audit trail. Calls core PhoenixKit.Activity.log/1 with a
+  # standardised action string ("sync.connection.<verb>") and the safe
+  # subset of connection fields that aren't PII (name, direction, status
+  # — NOT the site_url, which may leak internal hostnames to the audit
+  # log). Guarded so the module keeps working if PhoenixKit.Activity is
+  # stripped or the activities table is missing during tests, and rescued
+  # so a logging failure never crashes the primary operation.
+  defp log_sync_activity(action, %Connection{} = connection, opts, extra_metadata \\ %{}) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      try do
+        metadata =
+          %{
+            "connection_name" => connection.name,
+            "direction" => connection.direction,
+            "status" => connection.status
+          }
+          |> Map.merge(extra_metadata)
+
+        PhoenixKit.Activity.log(%{
+          action: "sync.connection.#{action}",
+          module: "sync",
+          mode: "manual",
+          actor_uuid: Keyword.get(opts, :actor_uuid),
+          resource_type: "sync_connection",
+          resource_uuid: connection.uuid,
+          metadata: metadata
+        })
+      rescue
+        # Activity table might not exist in a minimal test setup; don't
+        # let an audit-log failure propagate into the caller's result.
+        _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
   defp broadcast(event) do
     case PhoenixKit.Config.pubsub_server() do
       nil -> :ok
@@ -144,6 +181,7 @@ defmodule PhoenixKitSync.Connections do
             "| status=#{connection.status}"
         )
 
+        log_sync_activity("created", connection, [])
         broadcast({:connection_created, connection.uuid})
         {:ok, connection, token}
 
@@ -365,7 +403,7 @@ defmodule PhoenixKitSync.Connections do
       {:ok, conn} = Connections.delete_connection(conn)
   """
   @spec delete_connection(Connection.t()) :: {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
-  def delete_connection(%Connection{} = connection) do
+  def delete_connection(%Connection{} = connection, opts \\ []) do
     Logger.info(
       "[Sync.Connections] Deleting connection " <>
         "| uuid=#{connection.uuid} " <>
@@ -377,6 +415,7 @@ defmodule PhoenixKitSync.Connections do
 
     case repo.delete(connection) do
       {:ok, deleted} ->
+        log_sync_activity("deleted", deleted, opts)
         broadcast({:connection_deleted, deleted.uuid})
         {:ok, deleted}
 
@@ -414,6 +453,7 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.approve_changeset(admin_user_uuid) |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("approved", updated, actor_uuid: admin_user_uuid)
         broadcast({:connection_status_changed, updated.uuid, "active"})
         {:ok, updated}
 
@@ -449,6 +489,10 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.suspend_changeset(admin_user_uuid, reason) |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("suspended", updated, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason
+        })
+
         broadcast({:connection_status_changed, updated.uuid, "suspended"})
         {:ok, updated}
 
@@ -484,6 +528,10 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.revoke_changeset(admin_user_uuid, reason) |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("revoked", updated, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason
+        })
+
         broadcast({:connection_status_changed, updated.uuid, "revoked"})
         {:ok, updated}
 
@@ -499,9 +547,9 @@ defmodule PhoenixKitSync.Connections do
 
       {:ok, conn} = Connections.reactivate_connection(conn)
   """
-  @spec reactivate_connection(Connection.t()) ::
+  @spec reactivate_connection(Connection.t(), keyword()) ::
           {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
-  def reactivate_connection(%Connection{} = connection) do
+  def reactivate_connection(%Connection{} = connection, opts \\ []) do
     Logger.info(
       "[Sync.Connections] Reactivating connection " <>
         "| uuid=#{connection.uuid}"
@@ -511,6 +559,7 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.reactivate_changeset() |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("reactivated", updated, opts)
         broadcast({:connection_status_changed, updated.uuid, "active"})
         {:ok, updated}
 
