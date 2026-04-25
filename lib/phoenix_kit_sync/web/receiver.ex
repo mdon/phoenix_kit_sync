@@ -20,6 +20,7 @@ defmodule PhoenixKitSync.Web.Receiver do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitSync.SchemaInspector
+  alias PhoenixKitSync.Web.Receiver.Helpers
   alias PhoenixKitSync.WebSocketClient
   alias PhoenixKitSync.Workers.ImportWorker
 
@@ -1905,42 +1906,6 @@ defmodule PhoenixKitSync.Web.Receiver do
     end
   end
 
-  defp format_number(num) when is_integer(num) do
-    num
-    |> Integer.to_string()
-    |> String.reverse()
-    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-    |> String.reverse()
-  end
-
-  defp format_number(_), do: "?"
-
-  defp format_strategy(:skip), do: "Skip existing"
-  defp format_strategy(:overwrite), do: "Overwrite existing"
-  defp format_strategy(:merge), do: "Merge data"
-  defp format_strategy(:append), do: "Append (new IDs)"
-
-  defp format_connection_error(:join_timeout),
-    do: "Connection timed out. Please check the URL and code."
-
-  defp format_connection_error(%{"message" => msg}), do: msg
-
-  defp format_connection_error({:error, :econnrefused}),
-    do: "Could not connect to sender. Please check the URL."
-
-  defp format_connection_error({:error, :nxdomain}),
-    do: "Could not find the sender's server. Please check the URL."
-
-  defp format_connection_error({:error, :timeout}),
-    do: "Connection timed out. Please try again."
-
-  defp format_connection_error(%WebSockex.ConnError{original: original}),
-    do: format_connection_error(original)
-
-  defp format_connection_error(reason) when is_binary(reason), do: reason
-
-  defp format_connection_error(reason), do: "Connection failed: #{inspect(reason)}"
-
   defp get_current_user(socket) do
     case socket.assigns[:phoenix_kit_current_scope] do
       %Scope{user: user} when not is_nil(user) ->
@@ -1954,94 +1919,19 @@ defmodule PhoenixKitSync.Web.Receiver do
     end
   end
 
-  defp fetch_local_counts(tables) do
-    Enum.reduce(tables, %{}, fn table, acc ->
-      case SchemaInspector.get_local_count(table["name"]) do
-        {:ok, count} -> Map.put(acc, table["name"], count)
-        _ -> acc
-      end
-    end)
-  end
-
-  defp count_new_tables(tables, local_counts) do
-    Enum.count(tables, fn table ->
-      not Map.has_key?(local_counts, table["name"])
-    end)
-  end
-
-  defp count_different_tables(tables, local_counts) do
-    Enum.count(tables, fn table ->
-      name = table["name"]
-      local_count = Map.get(local_counts, name)
-      sender_count = table["estimated_count"] || 0
-
-      not is_nil(local_count) and local_count != sender_count
-    end)
-  end
-
-  defp count_same_tables(tables, local_counts) do
-    Enum.count(tables, fn table ->
-      name = table["name"]
-      local_count = Map.get(local_counts, name)
-      sender_count = table["estimated_count"] || 0
-
-      not is_nil(local_count) and local_count == sender_count
-    end)
-  end
-
-  # Parse a comma-separated list of IDs into integers
-  defp parse_id_list(ids_string) when is_binary(ids_string) do
-    ids_string
-    |> String.split([",", " ", "\n"], trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.map(&parse_int(&1, nil))
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp parse_id_list(_), do: []
-
-  defp parse_int(str, default) when is_binary(str) do
-    case Integer.parse(String.trim(str)) do
-      {int, _} -> int
-      :error -> default
-    end
-  end
-
-  defp parse_int(_, default), do: default
-
-  # Get the primary key from a record (prefers "uuid", falls back to "id")
-  defp get_record_id(record) when is_map(record) do
-    Map.get(record, "uuid") || Map.get(record, :uuid) ||
-      Map.get(record, "id") || Map.get(record, :id)
-  end
-
-  defp get_record_id(_), do: nil
-
-  # Get table info by name from tables list
-  defp get_table_info(tables, table_name) do
-    Enum.find(tables, fn t -> t["name"] == table_name end)
-  end
-
-  # Get schema columns, handling both atom and string keys
-  defp get_schema_columns(nil), do: []
-
-  defp get_schema_columns(schema) when is_map(schema) do
-    # Try both atom and string keys (data comes through JSON as strings)
-    Map.get(schema, :columns) || Map.get(schema, "columns") || []
-  end
-
-  defp get_schema_columns(_), do: []
-
-  # Filter records based on filter mode
-  defp filter_records_by_mode(records, %{mode: :ids, ids: ids_string}) do
-    ids = parse_id_list(ids_string)
-
-    if Enum.empty?(ids) do
-      records
-    else
-      Enum.filter(records, fn r -> get_record_id(r) in ids end)
-    end
-  end
-
-  defp filter_records_by_mode(records, _filter), do: records
+  # Pure helpers (format/parse/count) live in Receiver.Helpers to keep this
+  # file focused on the LV callbacks and render body.
+  defdelegate format_number(num), to: Helpers
+  defdelegate format_strategy(strategy), to: Helpers
+  defdelegate format_connection_error(reason), to: Helpers
+  defdelegate fetch_local_counts(tables), to: Helpers
+  defdelegate count_new_tables(tables, local_counts), to: Helpers
+  defdelegate count_different_tables(tables, local_counts), to: Helpers
+  defdelegate count_same_tables(tables, local_counts), to: Helpers
+  defdelegate parse_id_list(ids), to: Helpers
+  defdelegate parse_int(str, default), to: Helpers
+  defdelegate get_record_id(record), to: Helpers
+  defdelegate get_table_info(tables, name), to: Helpers
+  defdelegate get_schema_columns(schema), to: Helpers
+  defdelegate filter_records_by_mode(records, filter), to: Helpers
 end

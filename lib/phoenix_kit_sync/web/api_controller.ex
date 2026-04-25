@@ -715,56 +715,19 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp validate_params(params) do
-    required_fields = ["sender_url", "connection_name", "auth_token"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
+  # Validators live in ApiController.Validators. Local thin wrappers keep
+  # the existing call-site names.
+  alias PhoenixKitSync.Web.ApiController.Validators
 
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         sender_url: params["sender_url"],
-         connection_name: params["connection_name"],
-         auth_token: params["auth_token"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp validate_delete_params(params) do
-    required_fields = ["sender_url", "auth_token_hash"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         sender_url: params["sender_url"],
-         auth_token_hash: params["auth_token_hash"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
+  defp validate_params(params), do: Validators.validate_register(params)
+  defp validate_delete_params(params), do: Validators.validate_delete(params)
+  defp validate_get_status_params(params), do: Validators.validate_get_status(params)
+  defp validate_status_params(params), do: Validators.validate_status(params)
 
   defp find_connection_by_hash(sender_url, auth_token_hash) do
     case Connections.find_by_site_url_and_hash(sender_url, auth_token_hash) do
       nil -> {:error, :not_found}
       connection -> {:ok, connection}
-    end
-  end
-
-  defp validate_get_status_params(params) do
-    required_fields = ["receiver_url", "auth_token_hash"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         receiver_url: params["receiver_url"],
-         auth_token_hash: params["auth_token_hash"]
-       }}
-    else
-      {:error, :missing_fields, missing}
     end
   end
 
@@ -776,27 +739,6 @@ defmodule PhoenixKitSync.Web.ApiController do
     case Connections.find_by_hash_and_direction(auth_token_hash, "sender") do
       nil -> {:error, :not_found}
       connection -> {:ok, connection}
-    end
-  end
-
-  defp validate_status_params(params) do
-    required_fields = ["sender_url", "auth_token_hash", "status"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    cond do
-      not Enum.empty?(missing) ->
-        {:error, :missing_fields, missing}
-
-      params["status"] not in ["active", "suspended", "revoked"] ->
-        {:error, :invalid_status}
-
-      true ->
-        {:ok,
-         %{
-           sender_url: params["sender_url"],
-           auth_token_hash: params["auth_token_hash"],
-           status: params["status"]
-         }}
     end
   end
 
@@ -930,32 +872,8 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp validate_list_tables_params(params) do
-    required_fields = ["auth_token_hash"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok, %{auth_token_hash: params["auth_token_hash"]}}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp validate_pull_data_params(params) do
-    required_fields = ["auth_token_hash", "table_name"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         auth_token_hash: params["auth_token_hash"],
-         table_name: params["table_name"],
-         conflict_strategy: params["conflict_strategy"] || "skip"
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
+  defp validate_list_tables_params(params), do: Validators.validate_list_tables(params)
+  defp validate_pull_data_params(params), do: Validators.validate_pull_data(params)
 
   defp find_sender_by_hash(auth_token_hash) do
     case Connections.find_by_hash_and_direction(auth_token_hash, "sender") do
@@ -1071,9 +989,7 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp valid_table_name?(table_name) do
-    Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_]*$/, table_name)
-  end
+  defp valid_table_name?(table_name), do: Validators.valid_table_name?(table_name)
 
   defp table_exists?(repo, table_name) do
     query = """
@@ -1127,52 +1043,8 @@ defmodule PhoenixKitSync.Web.ApiController do
 
   defp serialize_value(val), do: val
 
-  defp validate_schema_params(params) do
-    required_fields = ["auth_token_hash", "table_name"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         auth_token_hash: params["auth_token_hash"],
-         table_name: params["table_name"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp validate_records_params(params) do
-    required_fields = ["auth_token_hash", "table_name"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         auth_token_hash: params["auth_token_hash"],
-         table_name: params["table_name"],
-         limit: parse_int(params["limit"], 10),
-         offset: parse_int(params["offset"], 0),
-         ids: params["ids"],
-         id_start: params["id_start"],
-         id_end: params["id_end"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp parse_int(nil, default), do: default
-  defp parse_int(val, _default) when is_integer(val), do: val
-
-  defp parse_int(val, default) when is_binary(val) do
-    case Integer.parse(val) do
-      {int, _} -> int
-      :error -> default
-    end
-  end
-
-  defp parse_int(_, default), do: default
+  defp validate_schema_params(params), do: Validators.validate_schema(params)
+  defp validate_records_params(params), do: Validators.validate_records(params)
 
   defp get_table_schema(table_name) do
     if valid_table_name?(table_name) do

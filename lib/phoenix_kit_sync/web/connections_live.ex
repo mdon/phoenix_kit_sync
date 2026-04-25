@@ -183,71 +183,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     |> assign(:receiver_connections, receiver_connections)
   end
 
-  defp fetch_sender_statuses(receiver_connections) do
-    pid = self()
+  # Status fetch + verification helpers live in ConnectionsLive.Status to
+  # keep this file focused on the LV callbacks themselves. The sibling
+  # module spawns linked tasks that post result messages back to this LV.
+  defdelegate fetch_sender_statuses(receiver_connections),
+    to: PhoenixKitSync.Web.ConnectionsLive.Status
 
-    Enum.each(receiver_connections, fn conn ->
-      # Linked: if the LiveView dies, cancel the display fetch — there's no
-      # one left to render the result.
-      Task.start_link(fn ->
-        status = resolve_sender_status(conn)
-        send(pid, {:sender_status_fetched, conn.uuid, status})
-      end)
-    end)
-  end
-
-  defp resolve_sender_status(conn) do
-    case ConnectionNotifier.query_sender_status(conn) do
-      {:ok, status} when is_binary(status) -> status
-      {:ok, :offline} -> "offline"
-      {:ok, :not_found} -> "not_found"
-      {:error, _reason} -> "error"
-    end
-  end
-
-  defp verify_receiver_connections(sender_connections) do
-    pid = self()
-
-    Enum.each(sender_connections, fn conn ->
-      if should_verify_connection?(conn) do
-        verify_single_connection(conn, pid)
-      end
-    end)
-  end
-
-  defp should_verify_connection?(conn) do
-    notification_success =
-      get_in(conn.metadata || %{}, ["remote_notification", "notification_success"])
-
-    conn.status in ["active", "pending", "suspended"] && notification_success == true
-  end
-
-  defp verify_single_connection(conn, pid) do
-    # Linked: verify-on-mount is display-only — cancel if the LV dies.
-    Task.start_link(fn ->
-      handle_verification_result(ConnectionNotifier.verify_connection(conn), conn.uuid, pid)
-    end)
-  end
-
-  defp handle_verification_result({:ok, :not_found}, conn_uuid, pid) do
-    Logger.warning("[Sync.Connections] Verify returned not_found for connection #{conn_uuid}")
-
-    send(pid, {:receiver_connection_severed, conn_uuid})
-  end
-
-  defp handle_verification_result({:ok, :offline}, conn_uuid, _pid) do
-    Logger.debug("[Sync.Connections] Remote site offline during verify | uuid=#{conn_uuid}")
-  end
-
-  defp handle_verification_result({:error, reason}, conn_uuid, _pid) do
-    Logger.warning(
-      "[Sync.Connections] Verify failed for connection #{conn_uuid} | error=#{inspect(reason)}"
-    )
-
-    # Don't trigger severed on errors — could be transient network issue or hot reload
-  end
-
-  defp handle_verification_result(_result, _conn_uuid, _pid), do: :ok
+  defdelegate verify_receiver_connections(sender_connections),
+    to: PhoenixKitSync.Web.ConnectionsLive.Status
 
   @impl true
   def handle_event("filter", %{"direction" => direction}, socket) do

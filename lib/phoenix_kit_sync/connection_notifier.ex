@@ -1566,136 +1566,17 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     |> Enum.map_join(", ", fn col -> ~s["#{col}" = EXCLUDED."#{col}"] end)
   end
 
-  # 3-arity variant: knows which column the value is for, so decimal-string
-  # detection fires only on numeric/decimal columns. Non-binary values or
-  # values whose column isn't numeric fall through to prepare_value/1.
-  defp prepare_value(value, column, numeric_cols)
-       when is_binary(value) and is_binary(column) and is_list(numeric_cols) do
-    parse_datetime_string(value) || parse_date_string(value) || parse_time_string(value) ||
-      if(column in numeric_cols, do: parse_decimal_string(value)) ||
-      value
-  end
+  # Value / record-transformation helpers live in ConnectionNotifier.Prepare.
+  # Local aliases keep the call-site shape unchanged.
+  alias PhoenixKitSync.ConnectionNotifier.Prepare
 
-  defp prepare_value(value, _column, _numeric_cols), do: prepare_value(value)
+  defp prepare_value(value, column, numeric_cols),
+    do: Prepare.value(value, column, numeric_cols)
 
-  # 1-arity variant: kept for the non-import call sites (check_pk_exists,
-  # find_match_by_unique) where we're building a single parameterized query
-  # and the values are primary keys or unique-column keys — not free-text —
-  # so the broad decimal regex is fine.
-  defp prepare_value(value) when is_binary(value) do
-    parse_datetime_string(value) || parse_date_string(value) || parse_time_string(value) ||
-      parse_decimal_string(value) || value
-  end
-
-  defp prepare_value(%{"__phoenix_kit_binary__" => encoded}) when is_binary(encoded) do
-    case Base.decode64(encoded) do
-      {:ok, binary} -> binary
-      :error -> encoded
-    end
-  end
-
-  defp prepare_value(value), do: value
-
-  # Build the list of numeric/decimal column names for a table, once per
-  # import batch. Missing or unreachable tables degrade to an empty list so
-  # prepare_value/3 falls through to the safe "don't try to coerce" branch.
-  # A list (rather than MapSet) keeps the opaque type flowing cleanly through
-  # the untyped import_ctx map without Dialyzer friction; n is small enough
-  # that `column in list` membership is trivial.
-  defp fetch_numeric_columns(table_name) do
-    case SchemaInspector.get_schema(table_name) do
-      {:ok, %{columns: columns}} ->
-        columns
-        |> Enum.filter(fn col -> col.type in ~w[numeric decimal double precision real] end)
-        |> Enum.map(& &1.name)
-
-      _ ->
-        []
-    end
-  end
-
-  # Record field helpers — records may have string or atom keys depending on
-  # whether they came from JSON (string keys) or internal code (atom keys).
-  # These helpers safely access/set fields without creating atoms from untrusted data.
-  defp get_record_field(record, field) when is_binary(field) do
-    case Map.get(record, field) do
-      nil -> Map.get(record, String.to_existing_atom(field))
-      val -> val
-    end
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp put_record_field(record, field, value) when is_binary(field) do
-    record
-    |> Map.delete(field)
-    |> Map.reject(fn {k, _} -> is_atom(k) and Atom.to_string(k) == field end)
-    |> Map.put(field, value)
-  end
-
-  defp drop_record_field(record, field) when is_binary(field) do
-    record
-    |> Map.delete(field)
-    |> Map.reject(fn {k, _} -> is_atom(k) and Atom.to_string(k) == field end)
-  end
-
-  # Normalize all map keys to strings for consistent SQL column generation
-  defp normalize_record_keys(record) when is_map(record) do
-    Map.new(record, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  # DateTime with timezone (e.g., "2025-12-15T18:56:59.387453Z")
-  @datetime_regex ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/
-  defp parse_datetime_string(value) do
-    if Regex.match?(@datetime_regex, value) do
-      case DateTime.from_iso8601(value) do
-        {:ok, dt, _offset} -> dt
-        _ -> parse_naive_datetime(value)
-      end
-    end
-  end
-
-  defp parse_naive_datetime(value) do
-    case NaiveDateTime.from_iso8601(value) do
-      {:ok, ndt} -> ndt
-      _ -> nil
-    end
-  end
-
-  # Date only (e.g., "2025-12-15")
-  @date_regex ~r/^\d{4}-\d{2}-\d{2}$/
-  defp parse_date_string(value) do
-    if Regex.match?(@date_regex, value) do
-      case Date.from_iso8601(value) do
-        {:ok, d} -> d
-        _ -> nil
-      end
-    end
-  end
-
-  # Time only (e.g., "18:56:59" or "18:56:59.387453")
-  @time_regex ~r/^\d{2}:\d{2}:\d{2}(\.\d+)?$/
-  defp parse_time_string(value) do
-    if Regex.match?(@time_regex, value) do
-      case Time.from_iso8601(value) do
-        {:ok, t} -> t
-        _ -> nil
-      end
-    end
-  end
-
-  # Decimal-like strings (e.g., "0.00", "123.45", "-99.99")
-  # Only matches strings that look like decimals with a dot — plain integers
-  # like "123" are left as strings since Postgrex handles those fine.
-  @decimal_regex ~r/^-?\d+\.\d+$/
-  defp parse_decimal_string(value) do
-    if Regex.match?(@decimal_regex, value) do
-      Decimal.new(value)
-    end
-  rescue
-    _ -> nil
-  end
+  defp prepare_value(value), do: Prepare.value(value)
+  defp fetch_numeric_columns(table_name), do: Prepare.numeric_columns(table_name)
+  defp get_record_field(record, field), do: Prepare.get_field(record, field)
+  defp put_record_field(record, field, value), do: Prepare.put_field(record, field, value)
+  defp drop_record_field(record, field), do: Prepare.drop_field(record, field)
+  defp normalize_record_keys(record), do: Prepare.normalize_keys(record)
 end
