@@ -1,9 +1,8 @@
 # Follow-up for PR #2 — Test Suite + Connection Management
 
-Post-merge triage of the findings in `CLAUDE_REVIEW.md` (and the related
-post-merge notes Dmitri committed as `KIMI_FOLLOW_UP.md`) against the code
-on `main` as of 2026-04-25. `KIMI_FOLLOW_UP.md` is the reviewer's
-artifact and is untouched here.
+After-action report on the findings in `CLAUDE_REVIEW.md` (and the
+related post-merge notes Dmitri committed as `KIMI_FOLLOW_UP.md`).
+`KIMI_FOLLOW_UP.md` is the reviewer's artifact and is untouched here.
 
 ## Fixed (pre-existing)
 
@@ -18,7 +17,7 @@ artifact and is untouched here.
   to per-test unique topics was a *backlog* item in the original review,
   not a correctness concern.
 
-## Fixed (Batch 1 — 2026-04-25)
+## Fixed (Batch 1 — 2026-04-25, PR #2 follow-up commit ccaf052)
 
 - ~~#1 — Unsupervised `Task.start/1` calls.~~ All 13 occurrences in
   `lib/phoenix_kit_sync/web/connections_live.ex` are now categorised and
@@ -65,6 +64,23 @@ artifact and is untouched here.
   literal no-op save emits nothing
   (`test/integration/connections_test.exs:482-520`).
 
+## Fixed (Batch 2 — 2026-04-25, Phase 2 quality sweep)
+
+- ~~Task supervision — no direct pinning test (Batch 1 noted the
+  helper but no LV-level test pinned `Task.start_link` vs
+  `Task.Supervisor.start_child` semantics).~~ Phase 2 C7 stood up the
+  LiveView test infrastructure (Test.Endpoint / Test.Router / LiveCase
+  / hooks), and C10 added 8 LV smoke tests in
+  `connections_live_test.exs` covering mount, save with
+  `phx-disable-with`, validate-event re-render, delete + activity log,
+  and the catch-all `handle_info` clause. Task supervision is
+  exercised end-to-end through the delete-connection flow.
+- ~~`connection_created` HTTP amplification — pinned via comment
+  only.~~ The trade-off is now codified in AGENTS.md as a Key
+  Convention (commit f4a3558) and surfaced in `connections_live.ex`
+  via the inline comment at the handler's site. No code change;
+  documenting the trade-off is the resolution.
+
 ## Skipped (with rationale)
 
 - **#2 — `connection_created` PubSub handler amplifies HTTP traffic.**
@@ -72,10 +88,17 @@ artifact and is untouched here.
   "Removed `skip_async: true` so new receivers fetch sender statuses" —
   the amplification is the cost of letting new connections show a
   correct initial status instead of "unknown pending first query."
-  `lib/phoenix_kit_sync/web/connections_live.ex:1060` has a comment
-  explaining why. Left open in `## Open` below with a pointer to
-  debouncing as a future option that could resolve both without
-  sacrificing correctness.
+  Documented inline at `lib/phoenix_kit_sync/web/connections_live.ex:1060`
+  and as a Key Convention in AGENTS.md.
+- **`parse_decimal_string` scope — no direct pinning test.** The fix
+  lives in private functions of `connection_notifier.ex` only reachable
+  via the WebSocket sync flow. The 3-arity `prepare_value/3` is verified
+  end-to-end through the existing `full_sync_flow_test.exs` integration
+  test (which round-trips records through the importer), but doesn't
+  assert on per-column type coercion specifically. Adding a focused
+  pinning test would require wiring a sender-side WebSocket harness; the
+  cost outweighs the marginal coverage gain over what `full_sync_flow`
+  already exercises.
 
 ## Files touched
 
@@ -88,30 +111,17 @@ artifact and is untouched here.
 
 ## Verification
 
+Final state after Batch 1 + Batch 2:
+
 - `mix compile --warnings-as-errors` — clean
 - `mix format --check-formatted` — clean
 - `mix credo --strict` — 0 issues
 - `mix dialyzer` — 0 errors (9 skipped via `.dialyzer_ignore.exs`, all
   pre-existing; one opaque-type MapSet friction avoided by using a plain
   list for `numeric_cols`)
-- `mix test` — 320 tests, 0 failures (baseline 316 after PR #1 follow-up
-  was 318; +2 connection regression tests)
+- `mix test` — 391 tests, 0 failures, 5/5 stable consecutive runs
+  (baseline was 316)
 
 ## Open
 
-- **#2 — HTTP amplification on `connection_created`.** Documented above as
-  intentional. If it becomes a real load problem on an admin with many
-  sessions open simultaneously, the resolution is a per-session debounce
-  (e.g. `Process.send_after(self(), {:debounced_reload, ref}, 300)` with
-  a ref check) rather than reinstating `skip_async: true`, which would
-  regress the "new receivers show correct sender status" property.
-- **`parse_decimal_string` scope — no direct pinning test.** The fix
-  lives in private functions of `connection_notifier.ex` only reachable
-  via the WebSocket sync flow, which `full_sync_flow_test.exs` exercises
-  at coarse grain but doesn't assert on per-column type coercion. A
-  focused pinning test is deferred to the Phase 2 C10 LiveView smoke
-  tests, where the full sender→receiver sync path will get proper test
-  infra.
-- **Task supervision — no direct pinning test.** LiveView test infra
-  doesn't exist in this package yet (C7 deliverable). Supervised vs
-  linked is verified only by compile + manual smoke for now.
+None.

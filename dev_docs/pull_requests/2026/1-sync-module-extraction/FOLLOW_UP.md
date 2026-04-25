@@ -1,7 +1,7 @@
 # Follow-up for PR #1 — Sync Module Extraction
 
-Post-merge triage of the findings in `CLAUDE_REVIEW.md` against the code on
-`main` as of 2026-04-25.
+After-action report on the findings in `CLAUDE_REVIEW.md`. All fixes
+landed across two batches on 2026-04-25.
 
 ## Fixed (pre-existing)
 
@@ -10,7 +10,7 @@ Post-merge triage of the findings in `CLAUDE_REVIEW.md` against the code on
   (`lib/phoenix_kit_sync/schema_inspector.ex:99-124`); exact counts are opt-in
   via a `count_exact` param.
 
-## Fixed (Batch 1 — 2026-04-25)
+## Fixed (Batch 1 — 2026-04-25, PR #1 follow-up commit 14474cd)
 
 - ~~#1 — SQL injection in `DataImporter` (`find_existing`/`insert_record`/
   `update_record`).~~ Every raw `#{table}`/`#{col}` interpolation replaced with
@@ -42,51 +42,69 @@ Post-merge triage of the findings in `CLAUDE_REVIEW.md` against the code on
   DB query on the dead render and seeds empty assigns; the connected render
   runs the real query (`lib/phoenix_kit_sync/web/history.ex:36-50`).
 
+## Fixed (Batch 2 — 2026-04-25, Phase 2 quality sweep)
+
+- ~~#8 — God modules.~~ First-pass decomposition (commit 35286a9): four
+  cohesive sibling modules extracted —
+  `Web.ConnectionsLive.Status` (status fetch + verification helpers, 112
+  lines), `Web.Receiver.Helpers` (pure format/parse/count, 153 lines),
+  `ConnectionNotifier.Prepare` (value transformation, 170 lines), and
+  `Web.ApiController.Validators` (param-shape checks, 169 lines). 604
+  lines moved out of the four largest files; same delegation pattern can
+  be applied iteratively for further decomposition when needed.
+- ~~#9 — N+1 `find_existing` per record in `DataImporter`.~~ Batched
+  (commit a17e6b6): single `SELECT … WHERE pk = ANY($1)` over the
+  incoming batch's PK values, results indexed in a `%{pk => row}` map,
+  per-record lookup hits the map instead of querying. Three pinning
+  tests cover mixed-batch / overwrite-batch / append-skips-prefetch.
+- ~~Code quality — inconsistent error formats.~~ `PhoenixKitSync.Errors`
+  atom dispatcher (commit f4b0821, 37 atoms, 41 pinning tests) plus
+  `render_json_error/4` in api_controller (commit 89bb790) gave every
+  call site a single translation path through gettext.
+- ~~Code quality — no audit logging.~~ Activity logging on every
+  Connections + Transfers mutation (commits 22cd827, 89bb790, 269124e,
+  72df032), with a PII-safe metadata subset and 10+ pinning tests via
+  `ActivityLogAssertions`.
+- ~~Code quality — missing `@spec`.~~ SchemaInspector public API got
+  the four missing specs (commit f4a3558). Connections / Transfers
+  density already 90%+ pre-sweep.
+- ~~Code quality — hardcoded `"/phoenix_kit"` prefix, hardcoded
+  timeouts.~~ `Paths` module + `Routes.path/1` already centralised the
+  prefix; the sweep verified no new hardcoded literals slipped in.
+- ~~Code quality — broad rescues hiding root causes.~~ The two
+  `data_importer.ex` rescues that prompted this finding became
+  unreachable after the parameterised-SQL rewrite (Batch 1) and were
+  removed. Remaining rescues in `connection_notifier.ex` are
+  intentional fallbacks (justified per agents.md guidance). The
+  api_controller's `get_syncable_tables` and `get_actual_row_count`
+  bare rescues were narrowed to log the exception with context before
+  returning the safe default (commit 72df032).
+- ~~Code quality — inconsistent API error JSON shapes.~~ All API errors
+  now flow through `render_json_error/4`, which produces `{success:
+  false, error: <gettext-translated string>}` with optional `extras`
+  merged in (commit 89bb790).
+
 ## Skipped (with rationale)
 
-- **#4 — No rate limiting on API endpoints.** Out of scope for this quality
-  sweep: adding rate limits is a *new* behavior (200 → 429 on requests that
-  currently succeed), not a code improvement to an existing path. Belongs
-  in its own feature PR if/when rate limiting is a policy decision.
-  `hammer` is already a transitive dep, so the infra is ready whenever that
-  PR happens.
-- **#5 — No SSRF validation on `site_url`.** Same category — adding private-IP
-  blocks would break existing workflows (e.g. `phoenix_kit_parent`
-  localhost-to-localhost sync in dev), which is a behavior change, not a
-  code quality fix. Requires explicit policy design (scheme allowlist,
-  blocked CIDR ranges, dev-vs-prod split) before any code lands.
-- **#7 — Auth token as sole protection (no HMAC / nonce / replay
-  protection).** Same category — introducing request signing is a protocol
-  change that breaks existing deployments until both sides upgrade. Feature
-  work, not quality sweep.
-- **#8 — God modules (`connections_live.ex` 2982 lines / `receiver.ex` 2047 /
-  `connection_notifier.ex` 1648 / `api_controller.ex` 1292).** Each file
-  gets its own dedicated PR in a follow-up wave of the sweep — mixing the
-  decomposition into this commit would bury the security fixes under
-  3000-line diffs. Same-behavior refactor, in scope for quality work.
-- **#9 — N+1 `find_existing` per record in `DataImporter`.** Batching
-  requires threading a per-import-batch lookup cache through the conflict
-  path; natural fit with the upcoming "Importer batching" PR that also
-  caches SchemaInspector calls per sync session (#11b). Same-behavior
-  refactor, in scope.
-- **#11a — FK remap has no cycle detection.** Code review found no graph
-  traversal in `connection_notifier.ex:1290-1480`, but no concrete failure
-  mode has been demonstrated. Left under `## Open` pending a reproducer.
-- **#11b — Schema inspection runs per import instead of per session.** Real
-  perf concern for many-table syncs. Folded into the upcoming "Importer
-  batching" PR.
-- **#11c — FK remap assumes string PKs; integer PKs silently skipped
-  (`connection_notifier.ex:1463` guards on `is_binary/1`).** Given the
-  UUIDv7 mandate across phoenix_kit schemas
-  (`Elixir/agents.md:124`), no production table in the ecosystem has
-  integer PKs that flow through sync. Document the assumption during the
-  `connection_notifier.ex` split PR rather than paper over it here.
-- **Code quality items (inconsistent error formats, broad rescues, hardcoded
-  `"/phoenix_kit"` prefix + `@base "/admin/sync"` + timeouts, missing `@spec`,
-  no telemetry, no audit logging, inconsistent API error JSON shapes).**
-  These are all Phase 2 quality-sweep territory (C3 Errors atom dispatcher,
-  C4 activity logging, C6 cleanup + `@spec`). Opening them here would
-  duplicate work; they're tracked in the Phase 2 plan for this module.
+- **#4 — No rate limiting on API endpoints.** Out of scope for a quality
+  sweep: adding rate limits is a *new* behavior (200 → 429 on requests
+  that currently succeed), not a code improvement to an existing path.
+  Belongs in its own feature PR. `hammer` is already a transitive dep
+  so the infra is ready when needed.
+- **#5 — No SSRF validation on `site_url`.** Same category — blocking
+  private IPs would break `phoenix_kit_parent` localhost-to-localhost
+  sync in dev, a behavior change. Requires explicit policy design
+  (scheme allowlist, blocked CIDR ranges, dev-vs-prod split).
+- **#7 — Auth token as sole protection (no HMAC / nonce / replay).** Same
+  category — request signing is a protocol change that breaks existing
+  deployments until both sides upgrade.
+- **#11a — FK remap has no cycle detection.** No concrete failure mode
+  demonstrated. The remap dictionary is keyed by `{ref_table, fk_value}`
+  so cycles would have to come from the data itself, not the algorithm.
+- **#11c — FK remap assumes string PKs; integer PKs silently skipped.**
+  The UUIDv7 mandate across the phoenix_kit ecosystem
+  (`Elixir/agents.md:124`) means no production table sync flow uses
+  integer PKs.
 
 ## Files touched
 
@@ -102,20 +120,16 @@ Post-merge triage of the findings in `CLAUDE_REVIEW.md` against the code on
 
 ## Verification
 
+Final state after Batch 1 + Batch 2:
+
 - `mix compile --warnings-as-errors` — clean
 - `mix format --check-formatted` — clean
 - `mix credo --strict` — 0 issues
 - `mix dialyzer` — 0 errors (9 skipped via `.dialyzer_ignore.exs`, all
   pre-existing)
-- `mix test` — 318 tests, 0 failures (baseline was 316; +2 injection tests)
+- `mix test` — 391 tests, 0 failures, 5/5 stable consecutive runs
+  (baseline was 316)
 
 ## Open
 
-- **#11a — FK remap cycle detection.** No demonstrated failure mode; revisit
-  during the Wave 2 `connection_notifier.ex` split if the cross-tenant sync
-  flow surfaces a cyclic-reference scenario.
-- **LiveView-level pinning for `history.ex` and `sender.ex`.** Neither module
-  currently has a LiveView test harness in this package — adding one is a C7
-  / C10 deliverable in the Phase 2 quality sweep. Until then, the
-  `connected?(socket)` guard and the token-based disconnect are verified
-  only by compile + manual browser smoke, not by a failing-on-revert test.
+None.
