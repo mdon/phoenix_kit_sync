@@ -14,6 +14,8 @@ defmodule PhoenixKitSync.Web.Receiver.Helpers do
   changing any behavior.
   """
 
+  use Gettext, backend: PhoenixKitWeb.Gettext
+
   alias PhoenixKitSync.SchemaInspector
 
   @spec format_number(any()) :: String.t()
@@ -28,32 +30,33 @@ defmodule PhoenixKitSync.Web.Receiver.Helpers do
   def format_number(_), do: "?"
 
   @spec format_strategy(atom()) :: String.t()
-  def format_strategy(:skip), do: "Skip existing"
-  def format_strategy(:overwrite), do: "Overwrite existing"
-  def format_strategy(:merge), do: "Merge data"
-  def format_strategy(:append), do: "Append (new IDs)"
+  def format_strategy(:skip), do: gettext("Skip existing")
+  def format_strategy(:overwrite), do: gettext("Overwrite existing")
+  def format_strategy(:merge), do: gettext("Merge data")
+  def format_strategy(:append), do: gettext("Append (new IDs)")
 
   @spec format_connection_error(any()) :: String.t()
   def format_connection_error(:join_timeout),
-    do: "Connection timed out. Please check the URL and code."
+    do: gettext("Connection timed out. Please check the URL and code.")
 
   def format_connection_error(%{"message" => msg}), do: msg
 
   def format_connection_error({:error, :econnrefused}),
-    do: "Could not connect to sender. Please check the URL."
+    do: gettext("Could not connect to sender. Please check the URL.")
 
   def format_connection_error({:error, :nxdomain}),
-    do: "Could not find the sender's server. Please check the URL."
+    do: gettext("Could not find the sender's server. Please check the URL.")
 
   def format_connection_error({:error, :timeout}),
-    do: "Connection timed out. Please try again."
+    do: gettext("Connection timed out. Please try again.")
 
   def format_connection_error(%WebSockex.ConnError{original: original}),
     do: format_connection_error(original)
 
   def format_connection_error(reason) when is_binary(reason), do: reason
 
-  def format_connection_error(reason), do: "Connection failed: #{inspect(reason)}"
+  def format_connection_error(reason),
+    do: gettext("Connection failed: %{reason}", reason: inspect(reason))
 
   @spec fetch_local_counts(list()) :: map()
   def fetch_local_counts(tables) do

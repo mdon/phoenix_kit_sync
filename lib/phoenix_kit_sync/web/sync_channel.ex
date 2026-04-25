@@ -140,32 +140,44 @@ defmodule PhoenixKitSync.Web.SyncChannel do
   end
 
   def handle_in("request:records", payload, socket) do
-    table = Map.fetch!(payload, "table")
-    ref = Map.fetch!(payload, "ref")
-    offset = Map.get(payload, "offset", 0)
-    limit = Map.get(payload, "limit", 100)
+    # Payload comes from the (potentially malicious) WebSocket peer —
+    # never `Map.fetch!` on attacker-controlled keys, that crashes the
+    # channel and triggers a reconnect storm. Match-and-validate first.
+    case payload do
+      %{"table" => table, "ref" => ref}
+      when is_binary(table) and is_binary(ref) ->
+        offset = Map.get(payload, "offset", 0)
+        limit = Map.get(payload, "limit", 100)
 
-    Logger.debug(
-      "Sync.Channel: Records requested for #{table} (offset: #{offset}, limit: #{limit})"
-    )
+        Logger.debug(
+          "Sync.Channel: Records requested for #{table} (offset: #{offset}, limit: #{limit})"
+        )
 
-    case DataExporter.fetch_records(table, offset: offset, limit: limit) do
-      {:ok, records} ->
-        push(socket, "response:records", %{
-          records: records,
-          offset: offset,
-          has_more: length(records) == limit,
-          ref: ref
-        })
+        case DataExporter.fetch_records(table, offset: offset, limit: limit) do
+          {:ok, records} ->
+            push(socket, "response:records", %{
+              records: records,
+              offset: offset,
+              has_more: length(records) == limit,
+              ref: ref
+            })
 
-      {:error, reason} ->
-        push(socket, "response:error", %{
-          error: "Failed to fetch records: #{inspect(reason)}",
-          ref: ref
-        })
+          {:error, reason} ->
+            push(socket, "response:error", %{
+              error: "Failed to fetch records: #{inspect(reason)}",
+              ref: ref
+            })
+        end
+
+        {:noreply, socket}
+
+      _ ->
+        Logger.warning(
+          "Sync.Channel: request:records missing/invalid required fields | payload=#{inspect(payload, limit: 5)}"
+        )
+
+        {:reply, {:error, %{reason: "missing_fields"}}, socket}
     end
-
-    {:noreply, socket}
   end
 
   def handle_in(event, payload, socket) do

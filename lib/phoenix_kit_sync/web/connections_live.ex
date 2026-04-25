@@ -26,12 +26,13 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     project_title = Settings.get_project_title()
     config = PhoenixKitSync.get_config()
 
-    # Subscribe to connection updates
+    # Subscribe to connection updates. Topic name lives on `Connections`
+    # so broadcast and subscribe sites can never drift.
     if connected?(socket) do
       pubsub = PhoenixKit.Config.pubsub_server()
 
       if pubsub do
-        Phoenix.PubSub.subscribe(pubsub, "sync:connections")
+        Phoenix.PubSub.subscribe(pubsub, Connections.pubsub_topic())
       end
     end
 
@@ -1050,22 +1051,22 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         {count, 0, 0, nil}
 
       {:error, :offline} ->
-        {0, 0, 0, "Sender is offline"}
+        {0, 0, 0, gettext("Sender is offline")}
 
       {:error, :unauthorized} ->
-        {0, 0, 0, "Unauthorized - check connection token"}
+        {0, 0, 0, gettext("Unauthorized - check connection token")}
 
       {:error, :table_not_found} ->
-        {0, 0, 0, "Table not found on sender"}
+        {0, 0, 0, gettext("Table not found on sender")}
 
       {:error, reason} when is_binary(reason) ->
         {0, 0, 0, reason}
 
       {:error, reason} ->
-        {0, 0, 0, "Sync failed: #{inspect(reason)}"}
+        {0, 0, 0, gettext("Sync failed: %{reason}", reason: inspect(reason))}
 
       _ ->
-        {0, 0, 0, "Unknown error"}
+        {0, 0, 0, gettext("Unknown error")}
     end
   end
 

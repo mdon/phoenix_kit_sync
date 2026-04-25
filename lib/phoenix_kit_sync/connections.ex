@@ -96,10 +96,22 @@ defmodule PhoenixKitSync.Connections do
     :ok
   end
 
+  @doc """
+  PubSub topic that `Connections` broadcasts on for connection lifecycle
+  events (`:connection_created`, `:connection_updated`,
+  `:connection_status_changed`, `:connection_deleted`).
+
+  Subscribers should reference this constant rather than the literal
+  string so the topic name stays consistent across broadcast and
+  subscribe sites.
+  """
+  @spec pubsub_topic() :: String.t()
+  def pubsub_topic, do: "sync:connections"
+
   defp broadcast(event) do
     case PhoenixKit.Config.pubsub_server() do
       nil -> :ok
-      pubsub -> Phoenix.PubSub.broadcast(pubsub, "sync:connections", event)
+      pubsub -> Phoenix.PubSub.broadcast(pubsub, pubsub_topic(), event)
     end
   end
 

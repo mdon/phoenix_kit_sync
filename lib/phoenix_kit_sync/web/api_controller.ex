@@ -348,7 +348,13 @@ defmodule PhoenixKitSync.Web.ApiController do
   - 503 Service Unavailable - DB Sync module is disabled
   """
   def get_connection_status(conn, params) do
-    Logger.info("Sync API: get_connection_status called with params: #{inspect(params)}")
+    # Don't inspect the full params map — it contains `auth_token_hash`
+    # which is a sensitive credential. Log only the safe fields.
+    Logger.info(
+      "[Sync.API] get_connection_status called " <>
+        "| receiver_url=#{inspect(params["receiver_url"])} " <>
+        "| has_token_hash=#{params["auth_token_hash"] != nil}"
+    )
 
     with :ok <- check_module_enabled(),
          {:ok, validated} <- validate_get_status_params(params),
