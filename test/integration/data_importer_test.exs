@@ -257,4 +257,46 @@ defmodule PhoenixKitSync.Integration.DataImporterTest do
       assert results["sync_test_import_extra"].created == 2
     end
   end
+
+  describe "identifier validation (SQL injection guard)" do
+    test "rejects table names with SQL metacharacters" do
+      records = [%{"name" => "Alice", "email" => "a@x.io", "age" => 1}]
+
+      # Baseline: a known-good table inserts cleanly.
+      assert {:ok, %{created: 1}} = DataImporter.import_records(@test_table, records, :skip)
+
+      # Classic injection payloads — semicolon-drop, quote-break, comment,
+      # tautology. Every one must be rejected before any SQL is executed
+      # against the target table. Rejection surfaces as a plain `{:error, _}`
+      # from SchemaInspector.get_schema/1, which runs *before* DataImporter's
+      # internal SQL builder sees the identifier. That's defense in depth:
+      # even if a caller bypassed get_schema, DataImporter's own
+      # valid_identifier? guard would refuse the query.
+      for bad_table <- [
+            "#{@test_table}; DROP TABLE #{@test_table}; --",
+            "#{@test_table}'--",
+            "#{@test_table} OR 1=1",
+            "#{@test_table}\"; DELETE FROM #{@test_table}; --"
+          ] do
+        assert {:error, _reason} = DataImporter.import_records(bad_table, records, :skip)
+      end
+
+      # The original row survived every attempted injection.
+      assert count_rows() == 1
+    end
+
+    test "rejects column names with SQL metacharacters" do
+      # A record with a weaponised column name — note that SchemaInspector's
+      # get_schema only validates the table, so this payload *does* reach
+      # DataImporter's internal SQL path. The column-level identifier check
+      # stops the insert there: nothing lands in the DB, and the error is
+      # accumulated per-record rather than crashing the whole batch.
+      bad_record = [%{"name\"; DROP TABLE x; --" => "hacked"}]
+
+      assert {:ok, result} = DataImporter.import_records(@test_table, bad_record, :skip)
+      assert result.created == 0
+      assert result.errors != []
+      assert count_rows() == 0
+    end
+  end
 end

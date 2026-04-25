@@ -817,7 +817,7 @@ defmodule PhoenixKitSync.Web.ApiController do
           is_nil(provided_password) or provided_password == "" ->
             {:error, :password_required}
 
-          provided_password == stored_password ->
+          Plug.Crypto.secure_compare(provided_password, stored_password) ->
             :ok
 
           true ->

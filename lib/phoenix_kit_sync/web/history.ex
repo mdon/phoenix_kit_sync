@@ -33,9 +33,20 @@ defmodule PhoenixKitSync.Web.History do
       |> assign(:status_filter, nil)
       |> assign(:show_approval_modal, false)
       |> assign(:selected_transfer, nil)
-      |> load_transfers()
+      |> maybe_load_transfers()
 
     {:ok, socket}
+  end
+
+  defp maybe_load_transfers(socket) do
+    if connected?(socket), do: load_transfers(socket), else: assign_empty_transfers(socket)
+  end
+
+  defp assign_empty_transfers(socket) do
+    socket
+    |> assign(:transfers, [])
+    |> assign(:total_count, 0)
+    |> assign(:total_pages, 0)
   end
 
   @impl true

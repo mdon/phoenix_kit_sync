@@ -356,8 +356,9 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Verifies an auth token against the stored hash.
   """
-  def verify_auth_token(%__MODULE__{auth_token_hash: hash}, token) when is_binary(token) do
-    hash_token(token) == hash
+  def verify_auth_token(%__MODULE__{auth_token_hash: hash}, token)
+      when is_binary(token) and is_binary(hash) do
+    Plug.Crypto.secure_compare(hash_token(token), hash)
   end
 
   def verify_auth_token(_, _), do: false
@@ -369,8 +370,8 @@ defmodule PhoenixKitSync.Connection do
   def verify_download_password(%__MODULE__{download_password_hash: ""}, _), do: true
 
   def verify_download_password(%__MODULE__{download_password_hash: hash}, password)
-      when is_binary(password) do
-    hash_token(password) == hash
+      when is_binary(password) and is_binary(hash) do
+    Plug.Crypto.secure_compare(hash_token(password), hash)
   end
 
   def verify_download_password(_, _), do: false

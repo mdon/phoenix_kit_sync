@@ -467,12 +467,23 @@ defmodule PhoenixKitSync.SchemaInspector do
     end
   end
 
-  defp valid_identifier?(name) when is_binary(name) do
+  @doc """
+  Validates a PostgreSQL identifier (table or column name).
+
+  Only accepts names that start with a letter or underscore and contain only
+  alphanumerics and underscores. Anything else — including SQL metacharacters,
+  whitespace, or quotes — is rejected.
+
+  Use this to guard any dynamic identifier that will be interpolated into raw
+  SQL, before quoting it with double quotes.
+  """
+  @spec valid_identifier?(term()) :: boolean()
+  def valid_identifier?(name) when is_binary(name) do
     # Only allow alphanumeric and underscores, must start with letter or underscore
     Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_]*$/, name)
   end
 
-  defp valid_identifier?(_), do: false
+  def valid_identifier?(_), do: false
 
   # ===========================================
   # PRIVATE FUNCTIONS
