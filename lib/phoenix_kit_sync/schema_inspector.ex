@@ -313,6 +313,7 @@ defmodule PhoenixKitSync.SchemaInspector do
   Returns a map of table_name => list of referenced table names (FK dependencies).
   Only includes tables in the public schema.
   """
+  @spec get_all_foreign_keys(keyword()) :: {:ok, map()} | {:error, any()}
   def get_all_foreign_keys(opts \\ []) do
     schema = Keyword.get(opts, :schema, "public")
 
@@ -351,6 +352,7 @@ defmodule PhoenixKitSync.SchemaInspector do
   """
   @checksum_max_rows 10_000
 
+  @spec get_table_checksum(String.t(), keyword()) :: {:ok, String.t()} | {:error, any()}
   def get_table_checksum(table_name, opts \\ []) do
     schema = Keyword.get(opts, :schema, "public")
     max_rows = Keyword.get(opts, :max_rows, @checksum_max_rows)
@@ -396,6 +398,7 @@ defmodule PhoenixKitSync.SchemaInspector do
   @doc """
   Returns FK column details for a table: list of %{column, referenced_table, referenced_column}.
   """
+  @spec get_foreign_key_columns(String.t(), keyword()) :: {:ok, [map()]} | {:error, any()}
   def get_foreign_key_columns(table_name, opts \\ []) do
     schema = Keyword.get(opts, :schema, "public")
 
@@ -434,6 +437,7 @@ defmodule PhoenixKitSync.SchemaInspector do
   Used to match records by unique fields (e.g., match users by email).
   Returns list of lists (each inner list is a set of columns forming a unique constraint).
   """
+  @spec get_unique_columns(String.t(), keyword()) :: {:ok, [[String.t()]]} | {:error, any()}
   def get_unique_columns(table_name, opts \\ []) do
     schema = Keyword.get(opts, :schema, "public")
 
