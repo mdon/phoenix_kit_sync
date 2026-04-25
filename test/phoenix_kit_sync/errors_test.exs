@@ -1,0 +1,96 @@
+defmodule PhoenixKitSync.ErrorsTest do
+  use ExUnit.Case, async: true
+
+  alias PhoenixKitSync.Errors
+
+  # Every atom clause must return a specific non-empty string. A single
+  # `is_binary(html) > 0` check is exactly the test smell the playbook
+  # rejects at agents.md:270 — it passes for any output. These tests pin
+  # the *content* of the returned string for every atom.
+
+  describe "message/1 for known atoms" do
+    @atom_expectations [
+      {:already_exists, "Already exists"},
+      {:already_used, "Already used"},
+      {:cannot_start, "Cannot start"},
+      {:connection_exists, "A connection already exists"},
+      {:connection_expired, "Connection has expired"},
+      {:connection_not_active, "Connection is not active"},
+      {:connection_timeout, "Connection timed out"},
+      {:disconnected, "Disconnected"},
+      {:download_limit_reached, "Download limit reached"},
+      {:econnrefused, "Could not connect to the remote site"},
+      {:fetch_failed, "Fetch failed"},
+      {:incoming_denied, "Incoming connections are not allowed"},
+      {:invalid_code, "Invalid session code"},
+      {:invalid_identifier, "Invalid identifier"},
+      {:invalid_json, "Invalid JSON"},
+      {:invalid_password, "Invalid password"},
+      {:invalid_response, "Invalid response from remote site"},
+      {:invalid_status, "Invalid status"},
+      {:invalid_table_name, "Invalid table name"},
+      {:invalid_token, "Invalid auth token"},
+      {:ip_not_allowed, "IP address not in whitelist"},
+      {:join_timeout, "Connection timed out while joining"},
+      {:missing_code, "Missing session code"},
+      {:missing_connection_info, "Missing connection info"},
+      {:module_disabled, "Sync module is disabled"},
+      {:not_found, "Not found"},
+      {:nxdomain, "Could not resolve the remote site's domain"},
+      {:offline, "Remote site is offline"},
+      {:outside_allowed_hours, "Outside allowed connection hours"},
+      {:password_required, "Password required"},
+      {:record_limit_reached, "Record limit reached"},
+      {:table_not_found, "Table not found"},
+      {:timeout, "Request timed out"},
+      {:unauthorized, "Unauthorized"},
+      {:unavailable, "Unavailable"},
+      {:unexpected_response, "Unexpected response from remote site"}
+    ]
+
+    for {atom, expected} <- @atom_expectations do
+      test "#{inspect(atom)} maps to #{inspect(expected)}" do
+        assert Errors.message(unquote(atom)) == unquote(expected)
+      end
+    end
+  end
+
+  describe "message/1 unwrapping {:error, reason} tuples" do
+    test "unwraps and translates the inner atom" do
+      assert Errors.message({:error, :not_found}) == "Not found"
+      assert Errors.message({:error, :invalid_token}) == "Invalid auth token"
+    end
+  end
+
+  describe "message/1 for changesets" do
+    test "flattens changeset errors into a semicolon-separated string" do
+      changeset =
+        %Ecto.Changeset{}
+        |> Map.put(:errors,
+          name: {"can't be blank", [validation: :required]},
+          age: {"must be greater than %{number}", [validation: :number, number: 0]}
+        )
+        |> Map.put(:types, %{name: :string, age: :integer})
+
+      msg = Errors.message(changeset)
+
+      assert msg =~ "name: can't be blank"
+      assert msg =~ "age: must be greater than 0"
+      assert msg =~ "; "
+    end
+  end
+
+  describe "message/1 fallbacks" do
+    test "string pass-through" do
+      assert Errors.message("custom error message") == "custom error message"
+    end
+
+    test "unknown atom falls back to inspect/1 rather than crashing" do
+      assert Errors.message(:something_never_defined) == ":something_never_defined"
+    end
+
+    test "arbitrary term falls back to inspect/1" do
+      assert Errors.message({:weird, :tuple, 42}) == "{:weird, :tuple, 42}"
+    end
+  end
+end
