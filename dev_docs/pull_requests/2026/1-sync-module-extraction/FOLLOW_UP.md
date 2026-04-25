@@ -44,38 +44,43 @@ Post-merge triage of the findings in `CLAUDE_REVIEW.md` against the code on
 
 ## Skipped (with rationale)
 
-- **#7 — Auth token as sole protection (no HMAC / nonce / replay protection).**
-  Real, but its fix is a cross-cutting API hardening pass — request signing
-  changes every endpoint's request/response shape and needs coordinated
-  sender-side updates. Rolled into the Wave 2 "Security hardening" PR
-  alongside rate limiting (#4) and SSRF validation (#5), where they share a
-  boundary-protection review context.
-- **#4 — No rate limiting on API endpoints.** `hammer` is already a transitive
-  dep (confirmed via `mix deps.get`), so the infra is ready. Deferred to the
-  Wave 2 security-hardening PR.
-- **#5 — No SSRF validation on `site_url`.** Same Wave 2 bundle. Needs a
-  concrete policy call (scheme allowlist, blocked CIDR ranges) that's out
-  of scope for a security-hot-fix commit.
+- **#4 — No rate limiting on API endpoints.** Out of scope for this quality
+  sweep: adding rate limits is a *new* behavior (200 → 429 on requests that
+  currently succeed), not a code improvement to an existing path. Belongs
+  in its own feature PR if/when rate limiting is a policy decision.
+  `hammer` is already a transitive dep, so the infra is ready whenever that
+  PR happens.
+- **#5 — No SSRF validation on `site_url`.** Same category — adding private-IP
+  blocks would break existing workflows (e.g. `phoenix_kit_parent`
+  localhost-to-localhost sync in dev), which is a behavior change, not a
+  code quality fix. Requires explicit policy design (scheme allowlist,
+  blocked CIDR ranges, dev-vs-prod split) before any code lands.
+- **#7 — Auth token as sole protection (no HMAC / nonce / replay
+  protection).** Same category — introducing request signing is a protocol
+  change that breaks existing deployments until both sides upgrade. Feature
+  work, not quality sweep.
 - **#8 — God modules (`connections_live.ex` 2982 lines / `receiver.ex` 2047 /
   `connection_notifier.ex` 1648 / `api_controller.ex` 1292).** Each file
-  gets its own dedicated PR in Wave 2 — mixing the decomposition into a
-  follow-up commit would bury the security fixes under 3000-line diffs.
+  gets its own dedicated PR in a follow-up wave of the sweep — mixing the
+  decomposition into this commit would bury the security fixes under
+  3000-line diffs. Same-behavior refactor, in scope for quality work.
 - **#9 — N+1 `find_existing` per record in `DataImporter`.** Batching
   requires threading a per-import-batch lookup cache through the conflict
-  path; natural fit with the Wave 2 "Importer batching" PR that also caches
-  SchemaInspector calls per sync session (#11b).
+  path; natural fit with the upcoming "Importer batching" PR that also
+  caches SchemaInspector calls per sync session (#11b). Same-behavior
+  refactor, in scope.
 - **#11a — FK remap has no cycle detection.** Code review found no graph
   traversal in `connection_notifier.ex:1290-1480`, but no concrete failure
   mode has been demonstrated. Left under `## Open` pending a reproducer.
 - **#11b — Schema inspection runs per import instead of per session.** Real
-  perf concern for many-table syncs. Folded into the Wave 2 "Importer
+  perf concern for many-table syncs. Folded into the upcoming "Importer
   batching" PR.
 - **#11c — FK remap assumes string PKs; integer PKs silently skipped
   (`connection_notifier.ex:1463` guards on `is_binary/1`).** Given the
   UUIDv7 mandate across phoenix_kit schemas
   (`Elixir/agents.md:124`), no production table in the ecosystem has
-  integer PKs that flow through sync. Document the assumption in Wave 2
-  during the `connection_notifier.ex` split rather than paper over it here.
+  integer PKs that flow through sync. Document the assumption during the
+  `connection_notifier.ex` split PR rather than paper over it here.
 - **Code quality items (inconsistent error formats, broad rescues, hardcoded
   `"/phoenix_kit"` prefix + `@base "/admin/sync"` + timeouts, missing `@spec`,
   no telemetry, no audit logging, inconsistent API error JSON shapes).**
