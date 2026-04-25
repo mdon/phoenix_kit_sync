@@ -360,8 +360,8 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       {:ok, _connection} ->
         message =
           if connection.direction == "receiver",
-            do: "Connection severed",
-            else: "Connection deleted"
+            do: gettext("Connection severed"),
+            else: gettext("Connection deleted")
 
         socket =
           socket

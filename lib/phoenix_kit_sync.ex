@@ -300,8 +300,14 @@ defmodule PhoenixKitSync do
   @spec validate_incoming_password(String.t() | nil) :: boolean()
   def validate_incoming_password(provided_password) do
     case get_incoming_password() do
-      nil -> true
-      stored_password -> stored_password == provided_password
+      nil ->
+        true
+
+      stored_password when is_binary(stored_password) and is_binary(provided_password) ->
+        Plug.Crypto.secure_compare(provided_password, stored_password)
+
+      _ ->
+        false
     end
   end
 

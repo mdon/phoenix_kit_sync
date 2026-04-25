@@ -1430,11 +1430,16 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   defp stringify_pk(pk), do: inspect(pk)
 
   defp check_pk_exists(repo, table_name, pk_col, pk_value) do
-    sql = ~s[SELECT 1 FROM "#{table_name}" WHERE "#{pk_col}" = $1 LIMIT 1]
+    if SchemaInspector.valid_identifier?(table_name) and
+         SchemaInspector.valid_identifier?(pk_col) do
+      sql = ~s[SELECT 1 FROM "#{table_name}" WHERE "#{pk_col}" = $1 LIMIT 1]
 
-    case SQL.query(repo, sql, [prepare_value(pk_value)]) do
-      {:ok, %{num_rows: 1}} -> true
-      _ -> false
+      case SQL.query(repo, sql, [prepare_value(pk_value)]) do
+        {:ok, %{num_rows: 1}} -> true
+        _ -> false
+      end
+    else
+      false
     end
   rescue
     _ -> false
@@ -1443,6 +1448,23 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   defp find_match_by_unique(_repo, _table_name, _pk_col, _record, []), do: :no_match
 
   defp find_match_by_unique(repo, table_name, pk_col, record, [unique_cols | rest]) do
+    all_idents = [table_name, pk_col | unique_cols]
+
+    # Defense-in-depth: even though pk_col and unique_cols come from
+    # local schema introspection, table_name flows in from the import
+    # path (where it can ultimately trace back to a sender's wire data
+    # via pull_table_data_with_remap). Validate every dynamic identifier
+    # before splicing it into a quoted SQL string. Failures fall through
+    # to the next unique-constraint candidate, matching the existing
+    # rescue semantics.
+    if Enum.all?(all_idents, &SchemaInspector.valid_identifier?/1) do
+      do_find_match_by_unique(repo, table_name, pk_col, record, unique_cols, rest)
+    else
+      find_match_by_unique(repo, table_name, pk_col, record, rest)
+    end
+  end
+
+  defp do_find_match_by_unique(repo, table_name, pk_col, record, unique_cols, rest) do
     # Get values for this unique constraint's columns
     col_values =
       Enum.map(unique_cols, fn col ->
