@@ -189,7 +189,8 @@ defmodule PhoenixKitSync.Web.SyncWebsockCallbacksTest do
       state: state,
       conn: conn
     } do
-      payload = encode(nil, "r1", "transfer:conn:#{conn.uuid}", "request:records", %{"ref" => "r1"})
+      payload =
+        encode(nil, "r1", "transfer:conn:#{conn.uuid}", "request:records", %{"ref" => "r1"})
 
       assert {:ok, _new_state} = SyncWebsock.handle_in({payload, [opcode: :text]}, state)
     end

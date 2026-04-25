@@ -74,6 +74,24 @@ defmodule PhoenixKitSync.Integration.LogRedactionTest do
       refute log =~ token,
              "expected the raw auth token to never appear in logs; got: #{inspect(log)}"
     end
+
+    # Pre-fix the :not_found branch logged the full hash:
+    #   "...connection not found for hash: #{params[\"auth_token_hash\"]}"
+    # Post-fix logs only `has_token_hash=true|false`.
+    test "not-found branch never echoes the auth_token_hash", %{conn: conn} do
+      bogus_hash = String.duplicate("d", 64)
+
+      log =
+        capture_log([level: :warning], fn ->
+          post(conn, "/sync/api/get-connection-status", %{
+            "receiver_url" => "https://nobody.example.com",
+            "auth_token_hash" => bogus_hash
+          })
+        end)
+
+      refute log =~ bogus_hash,
+             "expected the auth_token_hash to be redacted from the not-found log; got: #{inspect(log)}"
+    end
   end
 
   describe "POST /sync/api/register-connection — password redaction" do
@@ -86,7 +104,8 @@ defmodule PhoenixKitSync.Integration.LogRedactionTest do
       log =
         capture_log([level: :info], fn ->
           post(conn, "/sync/api/register-connection", %{
-            "sender_url" => "https://logleak-pwd-#{System.unique_integer([:positive])}.example.com",
+            "sender_url" =>
+              "https://logleak-pwd-#{System.unique_integer([:positive])}.example.com",
             "connection_name" => "PwdLogTest",
             "auth_token" => "tok-#{System.unique_integer([:positive])}",
             "password" => wrong_password
@@ -109,7 +128,8 @@ defmodule PhoenixKitSync.Integration.LogRedactionTest do
       log =
         capture_log([level: :info], fn ->
           post(conn, "/sync/api/register-connection", %{
-            "sender_url" => "https://logleak-tok-#{System.unique_integer([:positive])}.example.com",
+            "sender_url" =>
+              "https://logleak-tok-#{System.unique_integer([:positive])}.example.com",
             "connection_name" => "TokLogTest",
             "auth_token" => raw_token
           })

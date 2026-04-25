@@ -47,6 +47,8 @@ defmodule PhoenixKitSync.Connections do
 
   import Ecto.Query, warn: false
 
+  use Gettext, backend: PhoenixKitWeb.Gettext
+
   require Logger
 
   alias PhoenixKit.RepoHelper
@@ -169,7 +171,8 @@ defmodule PhoenixKitSync.Connections do
     changeset =
       %Connection{}
       |> Connection.changeset(attrs)
-      |> Ecto.Changeset.add_error(:site_url, "cannot create a connection to yourself")
+      |> Ecto.Changeset.add_error(:site_url, gettext("cannot create a connection to yourself"))
+      |> Map.put(:action, :insert)
 
     {:error, changeset}
   end

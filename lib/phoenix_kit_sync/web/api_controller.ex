@@ -392,7 +392,8 @@ defmodule PhoenixKitSync.Web.ApiController do
 
       {:error, :not_found} ->
         Logger.warning(
-          "Sync API: get_connection_status - connection not found for hash: #{params["auth_token_hash"]}"
+          "Sync API: get_connection_status - connection not found " <>
+            "| has_token_hash=#{params["auth_token_hash"] != nil}"
         )
 
         conn

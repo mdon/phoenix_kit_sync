@@ -42,6 +42,7 @@ defmodule PhoenixKitSync.ErrorsTest do
       {:outside_allowed_hours, "Outside allowed connection hours"},
       {:password_required, "Password required"},
       {:record_limit_reached, "Record limit reached"},
+      {:table_not_allowed, "This connection is not authorised to access that table"},
       {:table_not_found, "Table not found"},
       {:timeout, "Request timed out"},
       {:unauthorized, "Unauthorized"},

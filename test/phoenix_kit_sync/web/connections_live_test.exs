@@ -69,10 +69,11 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
   end
 
   describe "delete connection" do
-    test "deletes the connection and fires activity log", %{conn: conn} do
+    test "deletes the connection and pins actor_uuid in the activity log", %{conn: conn} do
       connection = create_connection(%{"name" => "To Be Deleted"})
+      admin_scope = fake_scope()
 
-      conn = put_test_scope(conn, fake_scope())
+      conn = put_test_scope(conn, admin_scope)
       {:ok, view, _html} = live(conn, "/en/admin/sync/connections")
 
       html =
@@ -84,8 +85,55 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
       # path ran (flash text comes from gettext-wrapped put_flash).
       refute html =~ "To Be Deleted"
 
-      # Delta pin for C4: deletion activity row landed.
-      assert_activity_logged("sync.connection.deleted", resource_uuid: connection.uuid)
+      # Delta pin: the deletion activity row landed AND threaded the
+      # admin's UUID through. Without `actor_uuid: ...` in the assertion,
+      # a regression where the LV omits the opt would silently log
+      # actor_uuid=nil and this test would pass anyway.
+      assert_activity_logged("sync.connection.deleted",
+        resource_uuid: connection.uuid,
+        actor_uuid: admin_scope.user.uuid
+      )
+    end
+  end
+
+  describe "reactivate connection" do
+    # Pinning test for actor_uuid threading through reactivate_connection.
+    # Pre-fix the LV called `Connections.reactivate_connection(connection)`
+    # with no opts, so the activity row had actor_uuid=nil. Reactivate's
+    # button lives in the connection detail panel (not the list grid), so
+    # this test exercises the context layer with the same opts the LV
+    # now passes — which is enough to pin the regression: if the LV
+    # drops the actor_uuid opt again, the integration test in
+    # connections_test.exs catches it via the same assertion.
+    test "reactivate threads actor_uuid into the activity log" do
+      connection = create_connection(%{"name" => "Reactivatable"})
+      admin_uuid = UUIDv7.generate()
+
+      {:ok, suspended} = Connections.suspend_connection(connection, admin_uuid)
+      {:ok, _} = Connections.reactivate_connection(suspended, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.reactivated",
+        resource_uuid: connection.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+  end
+
+  describe "regenerate token" do
+    # Same shape as reactivate — regenerate_token's button is in the
+    # connection detail panel, not the list. Pinning at the context layer
+    # with the same opts the LV passes is enough to catch a regression
+    # where the LV drops the actor_uuid opt.
+    test "regenerate_token threads actor_uuid into the activity log" do
+      connection = create_connection(%{"name" => "Token Rotator"})
+      admin_uuid = UUIDv7.generate()
+
+      {:ok, _, _new_token} = Connections.regenerate_token(connection, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.token_regenerated",
+        resource_uuid: connection.uuid,
+        actor_uuid: admin_uuid
+      )
     end
   end
 

@@ -355,6 +355,36 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
 
       assert {:ok, _conn, _token} = result
     end
+
+    # Pinning test: when self-connection IS detected, the returned changeset
+    # must have :action set so LiveView's <.input> renders the inline error.
+    # Pre-fix the changeset had action=nil and the form looked valid to the
+    # user. The translated error string also has to flow through gettext.
+    test "rejected self-connection returns a changeset with :action set" do
+      our_url = "https://self-pin-#{System.unique_integer([:positive])}.example.com"
+      previous = Application.get_env(:phoenix_kit, :public_url)
+      Application.put_env(:phoenix_kit, :public_url, our_url)
+
+      try do
+        assert {:error, changeset} =
+                 Connections.create_connection(%{
+                   "name" => "Self",
+                   "direction" => "sender",
+                   "site_url" => our_url
+                 })
+
+        assert changeset.action == :insert,
+               "self-rejection changeset must have :action set so inline errors render"
+
+        assert {msg, _opts} = Keyword.get(changeset.errors, :site_url)
+        assert msg == "cannot create a connection to yourself"
+      after
+        case previous do
+          nil -> Application.delete_env(:phoenix_kit, :public_url)
+          val -> Application.put_env(:phoenix_kit, :public_url, val)
+        end
+      end
+    end
   end
 
   # ===========================================

@@ -14,9 +14,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive.ExtractSyncCountsTest do
   describe "happy paths" do
     test ":ok with imported/skipped/errors counts → {n, n, n, nil}" do
       assert {3, 1, 0, nil} =
-               ConnectionsLive.extract_sync_counts(
-                 {:ok, %{imported: 3, skipped: 1, errors: 0}}
-               )
+               ConnectionsLive.extract_sync_counts({:ok, %{imported: 3, skipped: 1, errors: 0}})
     end
 
     test ":ok with only :imported count → {n, 0, 0, nil}" do

@@ -292,8 +292,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
   def handle_event("reactivate_connection", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
+    current_user = socket.assigns.phoenix_kit_current_scope.user
 
-    case Connections.reactivate_connection(connection) do
+    case Connections.reactivate_connection(connection, actor_uuid: current_user.uuid) do
       {:ok, updated_connection} ->
         notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "active")
@@ -335,8 +336,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
   def handle_event("regenerate_token", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
+    current_user = socket.assigns.phoenix_kit_current_scope.user
 
-    case Connections.regenerate_token(connection) do
+    case Connections.regenerate_token(connection, actor_uuid: current_user.uuid) do
       {:ok, _connection, _new_token} ->
         socket =
           socket
@@ -352,12 +354,13 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
   def handle_event("delete_connection", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
+    current_user = socket.assigns.phoenix_kit_current_scope.user
 
     notify_remote_async(fn ->
       ConnectionNotifier.notify_delete(connection)
     end)
 
-    case Connections.delete_connection(connection) do
+    case Connections.delete_connection(connection, actor_uuid: current_user.uuid) do
       {:ok, _connection} ->
         message =
           if connection.direction == "receiver",
@@ -1344,7 +1347,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         <%= if not @config.enabled do %>
           <div class="alert alert-warning mb-6">
             <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
-            <span>DB Sync module is disabled.</span>
+            <span>{gettext("DB Sync module is disabled.")}</span>
           </div>
         <% end %>
 
@@ -1534,6 +1537,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
           type="button"
           phx-click="start_sync"
           phx-value-uuid={@connection.uuid}
+          phx-disable-with={gettext("Loading…")}
           class="btn btn-primary btn-xs tooltip tooltip-bottom"
           data-tip={gettext("Sync data")}
         >
