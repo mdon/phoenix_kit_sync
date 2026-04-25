@@ -107,6 +107,57 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
     end
   end
 
+  describe "request:records — malformed payload (DoS hardening)" do
+    # Pre-fix sync_channel.ex used Map.fetch! on the "table" and "ref"
+    # keys; missing keys crashed the channel and triggered a reconnect
+    # loop. Post-fix returns a structured error reply.
+
+    test "missing 'table' replies with structured error, doesn't crash", %{
+      socket: socket,
+      session: session
+    } do
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, SyncChannel, "transfer:#{session.code}")
+
+      ref = push(channel, "request:records", %{"ref" => "missing-table-1"})
+      assert_reply(ref, :error, %{reason: "missing_fields"})
+      assert Process.alive?(channel.channel_pid)
+    end
+
+    test "missing 'ref' replies with structured error, doesn't crash", %{
+      socket: socket,
+      session: session
+    } do
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, SyncChannel, "transfer:#{session.code}")
+
+      ref = push(channel, "request:records", %{"table" => "phoenix_kit_sync_connections"})
+      assert_reply(ref, :error, %{reason: "missing_fields"})
+      assert Process.alive?(channel.channel_pid)
+    end
+
+    test "wrong type for 'table' (integer) replies with error, doesn't crash", %{
+      socket: socket,
+      session: session
+    } do
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, SyncChannel, "transfer:#{session.code}")
+
+      ref = push(channel, "request:records", %{"table" => 12_345, "ref" => "bad-type"})
+      assert_reply(ref, :error, %{reason: "missing_fields"})
+      assert Process.alive?(channel.channel_pid)
+    end
+
+    test "empty payload replies with error, doesn't crash", %{socket: socket, session: session} do
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, SyncChannel, "transfer:#{session.code}")
+
+      ref = push(channel, "request:records", %{})
+      assert_reply(ref, :error, %{reason: "missing_fields"})
+      assert Process.alive?(channel.channel_pid)
+    end
+  end
+
   describe "unknown events" do
     test "replies with :error for unknown event", %{socket: socket, session: session} do
       {:ok, _reply, channel} =

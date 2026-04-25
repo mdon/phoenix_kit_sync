@@ -1042,7 +1042,11 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   # typed). Receiver and Sender LVs both have the same defensive clause.
   def handle_info(_msg, socket), do: {:noreply, socket}
 
-  defp extract_sync_counts(result) do
+  @doc false
+  # Public-but-not-API: exposed so tests can pin the gettext-translated
+  # error strings without driving a full sync flow. Used internally by
+  # process_table_sync_result/3.
+  def extract_sync_counts(result) do
     case result do
       {:ok, %{imported: imported, skipped: skipped, errors: errors}} ->
         {imported, skipped, errors, nil}

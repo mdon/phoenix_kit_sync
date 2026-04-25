@@ -174,6 +174,53 @@ defmodule PhoenixKitSync.Web.SyncWebsockCallbacksTest do
     end
   end
 
+  describe "handle_in/2 — malformed request:records (DoS hardening)" do
+    # Regression for the Map.fetch! → match-and-validate fix in
+    # sync_websock.ex. Pre-fix, missing/invalid keys crashed the
+    # WebSock process (DoS vector for any peer who can connect).
+
+    setup do
+      conn = create_active_sender()
+      {:ok, state} = SyncWebsock.init(auth_type: :connection, connection: conn)
+      {:ok, state: %{state | joined: true}, conn: conn}
+    end
+
+    test "missing 'table' key — handler returns {:ok, state}, doesn't crash", %{
+      state: state,
+      conn: conn
+    } do
+      payload = encode(nil, "r1", "transfer:conn:#{conn.uuid}", "request:records", %{"ref" => "r1"})
+
+      assert {:ok, _new_state} = SyncWebsock.handle_in({payload, [opcode: :text]}, state)
+    end
+
+    test "missing 'ref' key — handler returns {:ok, state}, doesn't crash", %{
+      state: state,
+      conn: conn
+    } do
+      payload =
+        encode(nil, "r2", "transfer:conn:#{conn.uuid}", "request:records", %{"table" => "x"})
+
+      assert {:ok, _new_state} = SyncWebsock.handle_in({payload, [opcode: :text]}, state)
+    end
+
+    test "wrong type for 'table' (integer) — handler doesn't crash", %{state: state, conn: conn} do
+      payload =
+        encode(nil, "r3", "transfer:conn:#{conn.uuid}", "request:records", %{
+          "table" => 12_345,
+          "ref" => "r3"
+        })
+
+      assert {:ok, _new_state} = SyncWebsock.handle_in({payload, [opcode: :text]}, state)
+    end
+
+    test "empty payload — handler doesn't crash", %{state: state, conn: conn} do
+      payload = encode(nil, "r4", "transfer:conn:#{conn.uuid}", "request:records", %{})
+
+      assert {:ok, _new_state} = SyncWebsock.handle_in({payload, [opcode: :text]}, state)
+    end
+  end
+
   describe "terminate/2" do
     test "session-based: notifies owner_pid of receiver_disconnected" do
       session = %{code: "abc", owner_pid: self()}
