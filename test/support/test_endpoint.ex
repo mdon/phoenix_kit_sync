@@ -19,6 +19,15 @@ defmodule PhoenixKitSync.Test.Endpoint do
 
   socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
 
+  # Real cross-site sync flows POST JSON bodies; the parser is needed
+  # so ApiController gets `params` populated when ConnectionNotifier
+  # hits us.
+  plug(Plug.Parsers,
+    parsers: [:urlencoded, :json],
+    pass: ["*/*"],
+    json_decoder: Phoenix.json_library()
+  )
+
   plug(Plug.Session, @session_options)
   plug(PhoenixKitSync.Test.Router)
 end

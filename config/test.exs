@@ -21,8 +21,15 @@ config :logger, level: :warning
 # endpoint; this one is a minimal shim defined in
 # `test/support/test_endpoint.ex`.
 config :phoenix_kit_sync, PhoenixKitSync.Test.Endpoint,
-  url: [host: "localhost", port: 4002],
+  # Bandit is a transitive dep via phoenix; Cowboy isn't, so explicitly
+  # set the adapter here. http: port: 0 binds a random free port; the
+  # test_helper reads it back via Application env so tests can build
+  # localhost URLs that ConnectionNotifier / WebSocketClient reach.
+  adapter: Bandit.PhoenixAdapter,
+  http: [ip: {127, 0, 0, 1}, port: 0],
+  url: [host: "localhost"],
   secret_key_base: String.duplicate("a", 64),
   render_errors: [formats: [html: PhoenixKitSync.Test.Layouts]],
   live_view: [signing_salt: "sync-test-live-view-salt"],
-  server: false
+  pubsub_server: PhoenixKitSync.Test.PubSub,
+  server: true

@@ -445,6 +445,14 @@ defmodule PhoenixKitSync.Connection do
   def ip_allowed?(%__MODULE__{ip_whitelist: []}), do: true
   def ip_allowed?(%__MODULE__{ip_whitelist: nil}), do: true
 
+  # An empty / nil whitelist means "allow all" regardless of which arity
+  # was called. Without these clauses, the 2-arity catch-all below
+  # returns false for any connection that hasn't explicitly opted into a
+  # whitelist — exactly the AGENTS.md:140 trap. Callers like SocketPlug
+  # pass a real client IP, which previously hit the catch-all and 403'd.
+  def ip_allowed?(%__MODULE__{ip_whitelist: []}, _ip), do: true
+  def ip_allowed?(%__MODULE__{ip_whitelist: nil}, _ip), do: true
+
   def ip_allowed?(%__MODULE__{ip_whitelist: whitelist}, ip) when is_binary(ip) do
     ip in whitelist
   end

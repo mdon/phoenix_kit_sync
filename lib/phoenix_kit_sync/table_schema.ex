@@ -15,6 +15,12 @@ defmodule PhoenixKitSync.TableSchema do
 
   alias PhoenixKitSync.ColumnInfo
 
+  # Jason.Encoder is required because the WebSocket sync protocol pushes
+  # the schema struct directly through Phoenix.Channel.push/3 (which
+  # JSON-encodes the payload). Without this derive, any
+  # `request:schema` event crashes the channel with
+  # `Protocol.UndefinedError`.
+  @derive Jason.Encoder
   @enforce_keys [:table, :schema]
   defstruct [:table, :schema, columns: [], primary_key: []]
 

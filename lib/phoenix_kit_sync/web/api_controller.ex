@@ -1164,7 +1164,7 @@ defmodule PhoenixKitSync.Web.ApiController do
   end
 
   defp fetch_filtered_records(repo, table_name, limit, offset, filter_opts) do
-    pk_col = PhoenixKit.RepoHelper.get_pk_column(table_name)
+    pk_col = resolve_pk_column(table_name)
     {where_clause, params, next_param} = build_where_clause(filter_opts, pk_col)
 
     data_query =
@@ -1178,6 +1178,18 @@ defmodule PhoenixKitSync.Web.ApiController do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # PhoenixKit.RepoHelper.get_pk_column/1 falls back to "id" for any
+  # table it doesn't recognise as an Ecto schema. That's wrong for
+  # phoenix_kit's UUIDv7-PK tables (and any other UUID-PK table). Query
+  # Postgres directly via SchemaInspector.get_primary_key/2 — works for
+  # any real table.
+  defp resolve_pk_column(table_name) do
+    case SchemaInspector.get_primary_key(table_name) do
+      {:ok, [pk | _]} when is_binary(pk) -> pk
+      _ -> "id"
     end
   end
 

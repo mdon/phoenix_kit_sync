@@ -140,11 +140,36 @@ case Task.Supervisor.start_link(name: PhoenixKit.TaskSupervisor) do
   {:error, {:already_started, _pid}} -> :ok
 end
 
+# Start SessionStore so PhoenixKitSync.create_session/2 +
+# PhoenixKitSync.validate_code/1 work in tests. The store is a
+# GenServer that owns an ETS table; without it any code-based session
+# operation crashes with "the table identifier does not refer to an
+# existing ETS table".
+case PhoenixKitSync.SessionStore.start_link([]) do
+  {:ok, _pid} -> :ok
+  {:error, {:already_started, _pid}} -> :ok
+end
+
 # Start the test endpoint so Phoenix.LiveViewTest.live/2 can drive
 # LiveViews through `/en/admin/sync/*` URLs. Only when the DB is
 # available (otherwise integration tests are excluded anyway).
 if repo_available do
+  # PubSub server for the test endpoint — required by Phoenix.Socket
+  # initialisation in Phoenix.ChannelTest.
+  {:ok, _} = Phoenix.PubSub.Supervisor.start_link(name: PhoenixKitSync.Test.PubSub)
+
+  # Finch instance ConnectionNotifier reaches for via get_finch_name/0.
+  # Required by tests that drive HTTP cross-site flows.
+  {:ok, _} = Finch.start_link(name: PhoenixKit.Finch)
+
   {:ok, _pid} = PhoenixKitSync.Test.Endpoint.start_link()
+
+  # Read the actual port the test endpoint bound to so test code can
+  # build localhost URLs that ConnectionNotifier / WebSocketClient
+  # actually reach. Phoenix.Endpoint.server_info/2 reports the bound
+  # address tuple after Bandit has registered its listener.
+  {:ok, {_addr, test_port}} = PhoenixKitSync.Test.Endpoint.server_info(:http)
+  Application.put_env(:phoenix_kit_sync, :test_endpoint_port, test_port)
 
   # Pin URL prefix to "" via :persistent_term so PhoenixKit.Utils.Routes
   # doesn't try to query the settings table for the live URL prefix
