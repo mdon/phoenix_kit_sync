@@ -184,7 +184,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       WebSocketClient.request_tables(socket.assigns.ws_client)
       {:noreply, assign(socket, :loading_tables, true)}
     else
-      {:noreply, put_flash(socket, :error, "Not connected to sender")}
+      {:noreply, put_flash(socket, :error, gettext("Not connected to sender"))}
     end
   end
 
@@ -240,7 +240,7 @@ defmodule PhoenixKitSync.Web.Receiver do
   @impl true
   def handle_event("start_transfer", _params, socket) do
     if MapSet.size(socket.assigns.selected_tables) == 0 do
-      {:noreply, put_flash(socket, :error, "Please select at least one table")}
+      {:noreply, put_flash(socket, :error, gettext("Please select at least one table"))}
     else
       tables_list = MapSet.to_list(socket.assigns.selected_tables)
 
@@ -396,7 +396,7 @@ defmodule PhoenixKitSync.Web.Receiver do
             |> assign(:creating_table, false)
             |> assign(:local_table_exists, true)
             |> assign(:local_counts, local_counts)
-            |> put_flash(:info, "Table '#{table}' created successfully")
+            |> put_flash(:info, gettext("Table '%{table}' created successfully", table: table))
 
           {:noreply, socket}
 
@@ -406,12 +406,15 @@ defmodule PhoenixKitSync.Web.Receiver do
           socket =
             socket
             |> assign(:creating_table, false)
-            |> put_flash(:error, "Failed to create table: #{inspect(reason)}")
+            |> put_flash(
+              :error,
+              gettext("Failed to create table: %{reason}", reason: inspect(reason))
+            )
 
           {:noreply, socket}
       end
     else
-      {:noreply, put_flash(socket, :error, "No table selected or schema not loaded")}
+      {:noreply, put_flash(socket, :error, gettext("No table selected or schema not loaded"))}
     end
   end
 
@@ -451,7 +454,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       send(self(), :execute_transfer)
       {:noreply, socket}
     else
-      {:noreply, put_flash(socket, :error, "Please select a table first")}
+      {:noreply, put_flash(socket, :error, gettext("Please select a table first"))}
     end
   end
 
@@ -527,7 +530,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       |> assign(:connected, false)
       |> assign(:ws_client, nil)
       |> assign(:connection_status, nil)
-      |> put_flash(:info, "Disconnected from sender")
+      |> put_flash(:info, gettext("Disconnected from sender"))
 
     {:noreply, socket}
   end
@@ -547,7 +550,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       if socket.assigns.step == :enter_credentials do
         assign(socket, :error_message, format_connection_error(reason))
       else
-        put_flash(socket, :info, "Connection closed")
+        put_flash(socket, :info, gettext("Connection closed"))
       end
 
     {:noreply, socket}
@@ -585,7 +588,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       |> assign(:connected, false)
       |> assign(:ws_client, nil)
       |> assign(:step, :enter_credentials)
-      |> put_flash(:info, "Sender closed the connection")
+      |> put_flash(:info, gettext("Sender closed the connection"))
 
     {:noreply, socket}
   end
@@ -656,7 +659,10 @@ defmodule PhoenixKitSync.Web.Receiver do
       socket =
         socket
         |> assign(:pending_schemas, pending_schemas)
-        |> put_flash(:warning, "Could not get schema for #{table}, table won't be auto-created")
+        |> put_flash(
+          :warning,
+          gettext("Could not get schema for %{table}, table won't be auto-created", table: table)
+        )
 
       # Check if all schemas have been received/failed
       if Enum.empty?(pending_schemas) do
@@ -680,7 +686,13 @@ defmodule PhoenixKitSync.Web.Receiver do
         socket
         |> assign(:loading_schema, false)
         |> assign(:detail_table_schema, nil)
-        |> put_flash(:error, "Failed to load schema for #{table}: #{error}")
+        |> put_flash(
+          :error,
+          gettext("Failed to load schema for %{table}: %{error}",
+            table: table,
+            error: to_string(error)
+          )
+        )
 
       {:noreply, socket}
     end
@@ -805,7 +817,13 @@ defmodule PhoenixKitSync.Web.Receiver do
           tables_done: progress.tables_done + 1,
           pending_fetch: nil
       })
-      |> put_flash(:warning, "Failed to fetch records from #{table}: #{error}")
+      |> put_flash(
+        :warning,
+        gettext("Failed to fetch records from %{table}: %{error}",
+          table: table,
+          error: to_string(error)
+        )
+      )
 
     # Continue with next table
     socket =
@@ -826,7 +844,7 @@ defmodule PhoenixKitSync.Web.Receiver do
     socket =
       socket
       |> assign(:loading_tables, false)
-      |> put_flash(:error, "Failed to load tables: #{error}")
+      |> put_flash(:error, gettext("Failed to load tables: %{error}", error: to_string(error)))
 
     {:noreply, socket}
   end
@@ -993,8 +1011,12 @@ defmodule PhoenixKitSync.Web.Receiver do
 
           <%!-- Submit Button --%>
           <div class="form-control mt-6">
-            <button type="submit" class="btn btn-primary btn-lg">
-              <.icon name="hero-link" class="w-5 h-5" /> Connect
+            <button
+              type="submit"
+              class="btn btn-primary btn-lg"
+              phx-disable-with={gettext("Connecting…")}
+            >
+              <.icon name="hero-link" class="w-5 h-5" /> {gettext("Connect")}
             </button>
           </div>
         </form>
@@ -1045,7 +1067,11 @@ defmodule PhoenixKitSync.Web.Receiver do
                 <p class="text-sm text-base-content/70 font-mono">{@sender_url}</p>
               </div>
             </div>
-            <button phx-click="disconnect" class="btn btn-outline btn-error btn-sm">
+            <button
+              phx-click="disconnect"
+              phx-disable-with={gettext("Disconnecting…")}
+              class="btn btn-outline btn-error btn-sm"
+            >
               <.icon name="hero-x-mark" class="w-4 h-4" /> Disconnect
             </button>
           </div>

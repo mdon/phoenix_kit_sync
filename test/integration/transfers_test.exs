@@ -1,5 +1,7 @@
 defmodule PhoenixKitSync.Integration.TransfersTest do
-  use PhoenixKitSync.DataCase, async: true
+  use PhoenixKitSync.DataCase, async: false
+
+  import PhoenixKitSync.ActivityLogAssertions
 
   alias PhoenixKitSync.Connections
   alias PhoenixKitSync.Transfers
@@ -182,6 +184,86 @@ defmodule PhoenixKitSync.Integration.TransfersTest do
 
       stats = Transfers.connection_stats(conn.uuid)
       assert is_map(stats)
+    end
+  end
+
+  describe "activity logging" do
+    test "create_transfer logs sync.transfer.created" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_users",
+          "connection_uuid" => conn.uuid
+        })
+
+      assert_activity_logged("sync.transfer.created",
+        resource_uuid: transfer.uuid,
+        metadata_has: %{"table_name" => "act_users", "direction" => "send"}
+      )
+    end
+
+    test "complete_transfer logs sync.transfer.completed" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_done",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, started} = Transfers.start_transfer(transfer)
+
+      {:ok, _} =
+        Transfers.complete_transfer(started, %{records_transferred: 7, bytes_transferred: 1_024})
+
+      assert_activity_logged("sync.transfer.completed",
+        resource_uuid: transfer.uuid,
+        metadata_has: %{"status" => "completed"}
+      )
+    end
+
+    test "fail_transfer logs sync.transfer.failed" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_failed",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, started} = Transfers.start_transfer(transfer)
+      {:ok, _} = Transfers.fail_transfer(started, "test failure reason")
+
+      assert_activity_logged("sync.transfer.failed",
+        resource_uuid: transfer.uuid,
+        metadata_has: %{"status" => "failed"}
+      )
+    end
+
+    test "approve_transfer logs sync.transfer.approved with actor_uuid" do
+      conn = create_connection()
+      admin_uuid = UUIDv7.generate()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_approve",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, _} = Transfers.request_approval(transfer)
+      transfer = Transfers.get_transfer!(transfer.uuid)
+
+      {:ok, _} = Transfers.approve_transfer(transfer, admin_uuid)
+
+      assert_activity_logged("sync.transfer.approved",
+        resource_uuid: transfer.uuid,
+        actor_uuid: admin_uuid
+      )
     end
   end
 end

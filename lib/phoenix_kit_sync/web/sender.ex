@@ -78,7 +78,12 @@ defmodule PhoenixKitSync.Web.Sender do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to generate code: #{inspect(reason)}")}
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Failed to generate code: %{reason}", reason: inspect(reason))
+         )}
     end
   end
 
@@ -98,7 +103,12 @@ defmodule PhoenixKitSync.Web.Sender do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to generate code: #{inspect(reason)}")}
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Failed to generate code: %{reason}", reason: inspect(reason))
+         )}
     end
   end
 
@@ -144,7 +154,7 @@ defmodule PhoenixKitSync.Web.Sender do
           |> assign(:receivers, receivers)
           |> maybe_update_step_for_receivers()
 
-        {:noreply, put_flash(socket, :info, "Receiver disconnected")}
+        {:noreply, put_flash(socket, :info, gettext("Receiver disconnected"))}
 
       nil ->
         {:noreply, socket}
@@ -221,7 +231,7 @@ defmodule PhoenixKitSync.Web.Sender do
       socket
       |> assign(:receivers, receivers)
       |> maybe_update_step_for_receivers()
-      |> put_flash(:info, "A receiver disconnected")
+      |> put_flash(:info, gettext("A receiver disconnected"))
 
     {:noreply, socket}
   end
@@ -233,7 +243,7 @@ defmodule PhoenixKitSync.Web.Sender do
 
     # For old format, we don't know which receiver, so just flash a message
     # The channel terminate will send the new format with PID
-    socket = put_flash(socket, :info, "A receiver disconnected")
+    socket = put_flash(socket, :info, gettext("A receiver disconnected"))
 
     {:noreply, socket}
   end
@@ -449,8 +459,12 @@ defmodule PhoenixKitSync.Web.Sender do
           </div>
 
           <div class="flex justify-center mt-4">
-            <button phx-click="disconnect" class="btn btn-outline btn-error">
-              <.icon name="hero-x-mark" class="w-5 h-5" /> End All Sessions
+            <button
+              phx-click="disconnect"
+              phx-disable-with={gettext("Disconnecting…")}
+              class="btn btn-outline btn-error"
+            >
+              <.icon name="hero-x-mark" class="w-5 h-5" /> {gettext("End All Sessions")}
             </button>
           </div>
         </div>
@@ -495,8 +509,9 @@ defmodule PhoenixKitSync.Web.Sender do
             <button
               phx-click="disconnect_receiver"
               phx-value-token={@receiver_data.token}
+              phx-disable-with={gettext("Disconnecting…")}
               class="btn btn-ghost btn-sm text-error"
-              title="Disconnect this receiver"
+              title={gettext("Disconnect this receiver")}
             >
               <.icon name="hero-x-mark" class="w-4 h-4" />
             </button>

@@ -32,6 +32,7 @@ defmodule PhoenixKitSync.ErrorsTest do
       {:invalid_token, "Invalid auth token"},
       {:ip_not_allowed, "IP address not in whitelist"},
       {:join_timeout, "Connection timed out while joining"},
+      {:missing_fields, "Missing required fields"},
       {:missing_code, "Missing session code"},
       {:missing_connection_info, "Missing connection info"},
       {:module_disabled, "Sync module is disabled"},

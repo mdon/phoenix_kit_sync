@@ -1,8 +1,9 @@
 defmodule PhoenixKitSync.Integration.ConnectionsTest do
   use PhoenixKitSync.DataCase, async: false
 
+  import PhoenixKitSync.ActivityLogAssertions
+
   alias PhoenixKitSync.Connections
-  alias PhoenixKitSync.Test.Repo, as: TestRepo
 
   @valid_attrs %{
     "name" => "Test Sender",
@@ -524,35 +525,20 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
     # connection's uuid as resource_uuid and a safe metadata subset
     # (name/direction/status — never site_url or auth fields).
 
-    defp activities_for(uuid) do
-      %{rows: rows} =
-        TestRepo.query!(
-          "SELECT action, actor_uuid, resource_uuid, metadata FROM phoenix_kit_activities WHERE resource_uuid = $1 ORDER BY inserted_at",
-          [Ecto.UUID.dump!(uuid)]
-        )
-
-      Enum.map(rows, fn [action, actor, resource, metadata] ->
-        %{
-          action: action,
-          actor_uuid: if(is_binary(actor), do: Ecto.UUID.cast!(actor)),
-          resource_uuid: Ecto.UUID.cast!(resource),
-          metadata: metadata
-        }
-      end)
-    end
-
     test "create_connection logs sync.connection.created" do
       conn =
         create_connection(%{
           "site_url" => "https://act-create-#{System.unique_integer([:positive])}.com"
         })
 
-      assert [entry] = activities_for(conn.uuid)
-      assert entry.action == "sync.connection.created"
-      assert entry.resource_uuid == conn.uuid
-      assert entry.metadata["connection_name"] == conn.name
-      assert entry.metadata["direction"] == "sender"
-      assert entry.metadata["status"] == "pending"
+      assert_activity_logged("sync.connection.created",
+        resource_uuid: conn.uuid,
+        metadata_has: %{
+          "connection_name" => conn.name,
+          "direction" => "sender",
+          "status" => "pending"
+        }
+      )
     end
 
     test "approve_connection logs sync.connection.approved with actor_uuid" do
@@ -564,9 +550,10 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       admin_uuid = UUIDv7.generate()
       {:ok, _} = Connections.approve_connection(conn, admin_uuid)
 
-      assert [_created, approved] = activities_for(conn.uuid)
-      assert approved.action == "sync.connection.approved"
-      assert approved.actor_uuid == admin_uuid
+      assert_activity_logged("sync.connection.approved",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
     end
 
     test "suspend_connection logs sync.connection.suspended with reason" do
@@ -578,10 +565,43 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       admin_uuid = UUIDv7.generate()
       {:ok, _} = Connections.suspend_connection(conn, admin_uuid, "Security audit")
 
-      suspended = activities_for(conn.uuid) |> List.last()
-      assert suspended.action == "sync.connection.suspended"
-      assert suspended.actor_uuid == admin_uuid
-      assert suspended.metadata["reason"] == "Security audit"
+      assert_activity_logged("sync.connection.suspended",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid,
+        metadata_has: %{"reason" => "Security audit"}
+      )
+    end
+
+    test "revoke_connection logs sync.connection.revoked with reason" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-revoke-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.revoke_connection(conn, admin_uuid, "Compromised")
+
+      assert_activity_logged("sync.connection.revoked",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid,
+        metadata_has: %{"reason" => "Compromised"}
+      )
+    end
+
+    test "reactivate_connection logs sync.connection.reactivated with actor opt" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-reactivate-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, suspended} = Connections.suspend_connection(conn, admin_uuid)
+      {:ok, _} = Connections.reactivate_connection(suspended, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.reactivated",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
     end
 
     test "delete_connection logs sync.connection.deleted with actor via opts" do
@@ -593,9 +613,10 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       admin_uuid = UUIDv7.generate()
       {:ok, _} = Connections.delete_connection(conn, actor_uuid: admin_uuid)
 
-      deleted = activities_for(conn.uuid) |> List.last()
-      assert deleted.action == "sync.connection.deleted"
-      assert deleted.actor_uuid == admin_uuid
+      assert_activity_logged("sync.connection.deleted",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
     end
 
     test "metadata never leaks site_url or auth_token_hash" do
@@ -604,10 +625,11 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
           "site_url" => "https://act-leak-check-#{System.unique_integer([:positive])}.com"
         })
 
-      [entry] = activities_for(conn.uuid)
-      refute entry.metadata["site_url"]
-      refute entry.metadata["auth_token_hash"]
-      refute entry.metadata["auth_token"]
+      created = assert_activity_logged("sync.connection.created", resource_uuid: conn.uuid)
+      metadata = created.metadata || %{}
+      refute Map.has_key?(metadata, "site_url")
+      refute Map.has_key?(metadata, "auth_token_hash")
+      refute Map.has_key?(metadata, "auth_token")
     end
   end
 end

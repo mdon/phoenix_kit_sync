@@ -94,14 +94,50 @@ defmodule PhoenixKitSync.Transfers do
         initiated_by_uuid: current_user.uuid
       })
   """
-  @spec create_transfer(map()) :: {:ok, Transfer.t()} | {:error, Ecto.Changeset.t()}
-  def create_transfer(attrs) do
+  @spec create_transfer(map(), keyword()) :: {:ok, Transfer.t()} | {:error, Ecto.Changeset.t()}
+  def create_transfer(attrs, opts \\ []) do
     repo = RepoHelper.repo()
 
     %Transfer{}
     |> Transfer.changeset(attrs)
     |> repo.insert()
+    |> tap_activity("created", opts)
   end
+
+  # Best-effort audit trail for Transfers. Same pattern as
+  # Connections.log_sync_activity/4: guarded with Code.ensure_loaded? +
+  # rescued so a missing phoenix_kit_activities table never crashes the
+  # operation. Metadata is deliberately limited to table_name, direction,
+  # status, records_requested/transferred (numbers + strings, never PII).
+  defp tap_activity({:ok, %Transfer{} = transfer} = result, action, opts) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      try do
+        metadata = %{
+          "table_name" => transfer.table_name,
+          "direction" => transfer.direction,
+          "status" => transfer.status,
+          "records_requested" => transfer.records_requested,
+          "records_transferred" => transfer.records_transferred
+        }
+
+        PhoenixKit.Activity.log(%{
+          action: "sync.transfer.#{action}",
+          module: "sync",
+          mode: "manual",
+          actor_uuid: Keyword.get(opts, :actor_uuid),
+          resource_type: "sync_transfer",
+          resource_uuid: transfer.uuid,
+          metadata: metadata
+        })
+      rescue
+        _ -> :ok
+      end
+    end
+
+    result
+  end
+
+  defp tap_activity(result, _action, _opts), do: result
 
   @doc """
   Gets a transfer by UUID.
@@ -233,9 +269,11 @@ defmodule PhoenixKitSync.Transfers do
       {:ok, transfer} = Transfers.delete_transfer(transfer)
   """
   @spec delete_transfer(Transfer.t()) :: {:ok, Transfer.t()} | {:error, Ecto.Changeset.t()}
-  def delete_transfer(%Transfer{} = transfer) do
+  def delete_transfer(%Transfer{} = transfer, opts \\ []) do
     repo = RepoHelper.repo()
+
     repo.delete(transfer)
+    |> tap_activity("deleted", opts)
   end
 
   # ===========================================
@@ -343,6 +381,7 @@ defmodule PhoenixKitSync.Transfers do
     transfer
     |> Transfer.complete_changeset(final_stats)
     |> repo.update()
+    |> tap_activity("completed", [])
   end
 
   @doc """
@@ -372,6 +411,7 @@ defmodule PhoenixKitSync.Transfers do
     transfer
     |> Transfer.fail_changeset(error_message)
     |> repo.update()
+    |> tap_activity("failed", [])
   end
 
   @doc """
@@ -394,6 +434,7 @@ defmodule PhoenixKitSync.Transfers do
     transfer
     |> Transfer.cancel_changeset()
     |> repo.update()
+    |> tap_activity("cancelled", [])
   end
 
   # ===========================================
@@ -458,6 +499,7 @@ defmodule PhoenixKitSync.Transfers do
     transfer
     |> Transfer.approve_changeset(admin_user_uuid)
     |> repo.update()
+    |> tap_activity("approved", actor_uuid: admin_user_uuid)
   end
 
   @doc """
@@ -489,6 +531,7 @@ defmodule PhoenixKitSync.Transfers do
     transfer
     |> Transfer.deny_changeset(admin_user_uuid, reason)
     |> repo.update()
+    |> tap_activity("denied", actor_uuid: admin_user_uuid)
   end
 
   @doc """

@@ -147,7 +147,7 @@ defmodule PhoenixKitSync.Web.History do
       {:ok, _transfer} ->
         socket =
           socket
-          |> put_flash(:info, "Transfer approved successfully")
+          |> put_flash(:info, gettext("Transfer approved successfully"))
           |> assign(:show_approval_modal, false)
           |> assign(:selected_transfer, nil)
           |> load_transfers()
@@ -155,7 +155,7 @@ defmodule PhoenixKitSync.Web.History do
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to approve transfer")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to approve transfer"))}
     end
   end
 
@@ -172,7 +172,7 @@ defmodule PhoenixKitSync.Web.History do
       {:ok, _transfer} ->
         socket =
           socket
-          |> put_flash(:info, "Transfer denied")
+          |> put_flash(:info, gettext("Transfer denied"))
           |> assign(:show_approval_modal, false)
           |> assign(:selected_transfer, nil)
           |> load_transfers()
@@ -180,7 +180,7 @@ defmodule PhoenixKitSync.Web.History do
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to deny transfer")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to deny transfer"))}
     end
   end
 
@@ -622,8 +622,12 @@ defmodule PhoenixKitSync.Web.History do
                   class="input input-bordered input-sm w-48"
                 />
               </div>
-              <button type="submit" class="btn btn-error btn-sm">
-                Deny
+              <button
+                type="submit"
+                class="btn btn-error btn-sm"
+                phx-disable-with={gettext("Denying…")}
+              >
+                {gettext("Deny")}
               </button>
             </form>
             <button

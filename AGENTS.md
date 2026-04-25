@@ -283,3 +283,63 @@ Additional files per PR directory:
 - `README.md` — PR summary (what, why, files changed)
 - `FOLLOW_UP.md` — post-merge issues, discovered bugs
 - `CONTEXT.md` — alternatives considered, trade-offs
+
+## Routing: Single Page vs Multi-Page
+
+This module uses **both patterns**. Admin navigation is auto-generated from `admin_tabs/0` (three tabs: Overview / Connections / History), each with a `live_view:` binding. Public routes — the REST API and the WebSocket forward — go through a `route_module/0` (`PhoenixKitSync.Routes`) using `generate/1`.
+
+> **`admin_routes/0` and `admin_locale_routes/0` can only contain `live` declarations** — Phoenix's `live_session` macro rejects controllers, `forward`, nested `scope`, and `pipe_through` at compile time. Non-LiveView routes (our `ApiController` endpoints and `SyncSocket` WebSocket forward) go in `generate/1` / `public_routes/1` instead. See `lib/phoenix_kit_sync/routes.ex` for the reference — it's the canonical example across the ecosystem of mixing a `forward` directive with controller routes in `generate/1`.
+
+Sender / Receiver / History / Index LiveViews mount under `admin_tabs/0`; never hand-register them in a parent app's `router.ex` — they'd land outside the `:phoenix_kit_admin` `live_session` and crash on navigation.
+
+## Tailwind CSS Scanning
+
+`css_sources/0` returns `[:phoenix_kit_sync]` so the parent app's `:phoenix_kit_css_sources` compiler picks up sync's templates for Tailwind class scanning. Zero-config once the parent app has the compiler wired per core's `mix phoenix_kit.install` — adding or removing the sync module regenerates `_phoenix_kit_sources.css` automatically.
+
+## Database & Migrations
+
+The module owns two tables: `phoenix_kit_sync_connections` and `phoenix_kit_sync_transfers`. They're created either by:
+
+- **Core `phoenix_kit` versioned migrations** (V37 / V44 / V56 / V58 / V74) when the parent app runs `PhoenixKit.Migrations.up()` — the canonical path.
+- **`PhoenixKitSync.Migration`** standalone fallback with `CREATE TABLE IF NOT EXISTS`, used for fresh installs where the core migrations haven't run yet. Header at `lib/phoenix_kit_sync/migration.ex:1-10` documents which core V-numbers it mirrors — **if you modify table shape, keep this in sync with the canonical core migration**.
+
+All schemas use `@primary_key {:uuid, UUIDv7, autogenerate: true}` + `uuid_generate_v7()` function in the DB.
+
+## Versioning & Releases
+
+This project follows [Semantic Versioning](https://semver.org/). Release cuts are done by the project maintainer — agents do not bump `@version` or edit `CHANGELOG.md` unless explicitly asked.
+
+### Version locations
+
+When bumping, update **two places**:
+
+1. `mix.exs` — `@version` module attribute
+2. `lib/phoenix_kit_sync.ex` — `def version, do: "x.y.z"`
+
+(There is no dedicated version test in this module; the two must match manually.)
+
+### Tagging & GitHub releases
+
+Tags use **bare version numbers** (no `v` prefix):
+
+```bash
+git tag 0.1.1
+git push origin 0.1.1
+```
+
+## Pre-commit Commands
+
+Always run before `git commit`:
+
+```bash
+mix precommit               # compile + format + credo --strict + dialyzer
+```
+
+## Two Module Types (context)
+
+PhoenixKit has two external module archetypes:
+
+- **Template-only modules** (like `phoenix_kit_hello_world`) — showcase the conventions, have no schemas, no Errors module, minimal LiveView surface.
+- **Feature modules** (like this one, `phoenix_kit_sync`) — own Ecto schemas, implement a full feature with CRUD, activity logging, admin LiveViews, and REST/WebSocket APIs. The `PhoenixKitSync.Errors` atom dispatcher + activity-logging helper in `Connections` are load-bearing for feature-module quality; template modules omit them.
+
+When starting a new feature module, copy the file layout from this module or `phoenix_kit_catalogue`/`phoenix_kit_ai`. When starting a new template/showcase module, copy from `phoenix_kit_hello_world`.

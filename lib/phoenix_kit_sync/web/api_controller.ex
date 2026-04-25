@@ -25,6 +25,7 @@ defmodule PhoenixKitSync.Web.ApiController do
   alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKitSync
   alias PhoenixKitSync.Connections
+  alias PhoenixKitSync.Errors
   alias PhoenixKitSync.SchemaInspector
   alias PhoenixKitSync.Transfers
 
@@ -83,10 +84,7 @@ defmodule PhoenixKitSync.Web.ApiController do
     else
       {:error, :module_disabled} ->
         Logger.warning("[Sync.API] register_connection rejected: module disabled")
-
-        conn
-        |> put_status(503)
-        |> json(%{success: false, error: "DB Sync module is disabled"})
+        render_json_error(conn, 503, :module_disabled)
 
       {:error, :incoming_denied} ->
         Logger.warning(
@@ -95,9 +93,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| incoming_mode=#{PhoenixKitSync.get_incoming_mode()}"
         )
 
-        conn
-        |> put_status(403)
-        |> json(%{success: false, error: "Incoming connections are not allowed"})
+        render_json_error(conn, 403, :incoming_denied)
 
       {:error, :missing_fields, fields} ->
         Logger.warning(
@@ -106,9 +102,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| params_keys=#{inspect(Map.keys(params))}"
         )
 
-        conn
-        |> put_status(400)
-        |> json(%{success: false, error: "Missing required fields", fields: fields})
+        render_json_error(conn, 400, :missing_fields, %{fields: fields})
 
       {:error, :invalid_password} ->
         Logger.warning(
@@ -116,9 +110,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| sender_url=#{params["sender_url"]}"
         )
 
-        conn
-        |> put_status(401)
-        |> json(%{success: false, error: "Invalid password"})
+        render_json_error(conn, 401, :invalid_password)
 
       {:error, :password_required} ->
         Logger.warning(
@@ -126,9 +118,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| sender_url=#{params["sender_url"]}"
         )
 
-        conn
-        |> put_status(401)
-        |> json(%{success: false, error: "Password required for incoming connections"})
+        render_json_error(conn, 401, :password_required)
 
       {:error, :connection_exists} ->
         Logger.warning(
@@ -136,9 +126,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| sender_url=#{params["sender_url"]}"
         )
 
-        conn
-        |> put_status(409)
-        |> json(%{success: false, error: "Connection already exists for this site"})
+        render_json_error(conn, 409, :connection_exists)
 
       {:error, reason} ->
         Logger.error(
@@ -147,10 +135,23 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| error=#{inspect(reason)}"
         )
 
-        conn
-        |> put_status(500)
-        |> json(%{success: false, error: "Failed to create connection"})
+        render_json_error(conn, 500, :fetch_failed)
     end
+  end
+
+  # Renders a standardised JSON error response. Status is the HTTP status
+  # code; reason is an atom from PhoenixKitSync.Errors — dispatches through
+  # Errors.message/1 so every API error string is centrally translated and
+  # consistent. extras is merged into the response body (e.g. `:fields` for
+  # missing-field details).
+  defp render_json_error(conn, status, reason, extras \\ %{}) do
+    body =
+      %{success: false, error: Errors.message(reason)}
+      |> Map.merge(extras)
+
+    conn
+    |> put_status(status)
+    |> json(body)
   end
 
   @doc """

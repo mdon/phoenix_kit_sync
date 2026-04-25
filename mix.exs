@@ -72,7 +72,8 @@ defmodule PhoenixKitSync.MixProject do
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.39", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:lazy_html, ">= 0.0.0", only: :test}
     ]
   end
 end

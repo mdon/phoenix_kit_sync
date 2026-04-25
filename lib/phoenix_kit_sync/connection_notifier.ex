@@ -242,7 +242,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         {:ok, :not_found}
 
       {:ok, %{status: status, body: resp_body}} ->
-        Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
+        Logger.warning(
+          "Sync: Remote site returned unexpected status #{status}: " <>
+            truncate_body(resp_body)
+        )
+
         {:error, {:unexpected_status, status}}
 
       {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
@@ -313,7 +317,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         {:ok, :not_found}
 
       {:ok, %{status: status, body: resp_body}} ->
-        Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
+        Logger.warning(
+          "Sync: Remote site returned unexpected status #{status}: " <>
+            truncate_body(resp_body)
+        )
+
         {:error, {:unexpected_status, status}}
 
       {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
@@ -1564,6 +1572,19 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     columns
     |> Enum.reject(&(to_string(&1) == pk_col))
     |> Enum.map_join(", ", fn col -> ~s["#{col}" = EXCLUDED."#{col}"] end)
+  end
+
+  # Caps a response body at 500 bytes before it lands in a log line. Response
+  # bodies can be arbitrarily large (JSON error payloads, HTML error pages
+  # returned by misconfigured proxies, etc.); logging them unbounded
+  # blows up log storage and can leak unrelated data that the remote
+  # site's error page might include.
+  @log_body_limit 500
+  defp truncate_body(body) when is_binary(body) do
+    case byte_size(body) do
+      size when size <= @log_body_limit -> body
+      size -> binary_part(body, 0, @log_body_limit) <> "…(#{size - @log_body_limit} more bytes)"
+    end
   end
 
   # Value / record-transformation helpers live in ConnectionNotifier.Prepare.

@@ -43,6 +43,7 @@ defmodule PhoenixKitSync.Errors do
           | :invalid_token
           | :ip_not_allowed
           | :join_timeout
+          | :missing_fields
           | :missing_code
           | :missing_connection_info
           | :module_disabled
@@ -85,6 +86,7 @@ defmodule PhoenixKitSync.Errors do
   def message(:invalid_table_name), do: gettext("Invalid table name")
   def message(:invalid_token), do: gettext("Invalid auth token")
   def message(:ip_not_allowed), do: gettext("IP address not in whitelist")
+  def message(:missing_fields), do: gettext("Missing required fields")
   def message(:join_timeout), do: gettext("Connection timed out while joining")
   def message(:missing_code), do: gettext("Missing session code")
   def message(:missing_connection_info), do: gettext("Missing connection info")

@@ -83,6 +83,25 @@ repo_available =
       )
       """)
 
+      # Create phoenix_kit_settings with the REAL schema columns. LiveView
+      # mounts read `PhoenixKit.Settings.get_project_title/0` which queries
+      # this table; without it, every LV test crashes before render.
+      # Column shape is load-bearing: a mismatch ("column module does not
+      # exist") aborts the sandbox transaction — every subsequent query
+      # in the same test fails with "current transaction is aborted".
+      # See agents.md:664-673.
+      TestRepo.query!("""
+      CREATE TABLE IF NOT EXISTS phoenix_kit_settings (
+        uuid uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
+        key varchar(255) NOT NULL UNIQUE,
+        value text,
+        value_json jsonb,
+        module varchar(100),
+        date_added timestamp without time zone DEFAULT NOW(),
+        date_updated timestamp without time zone DEFAULT NOW()
+      )
+      """)
+
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
     rescue
@@ -111,6 +130,18 @@ Application.put_env(:phoenix_kit_sync, :test_repo_available, repo_available)
 # Start minimal services needed for tests
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
+
+# Start the test endpoint so Phoenix.LiveViewTest.live/2 can drive
+# LiveViews through `/en/admin/sync/*` URLs. Only when the DB is
+# available (otherwise integration tests are excluded anyway).
+if repo_available do
+  {:ok, _pid} = PhoenixKitSync.Test.Endpoint.start_link()
+
+  # Pin URL prefix to "" via :persistent_term so PhoenixKit.Utils.Routes
+  # doesn't try to query the settings table for the live URL prefix
+  # during test mounts (which would be a cross-process sandbox query).
+  :persistent_term.put({PhoenixKit.Config, :url_prefix}, "")
+end
 
 # Exclude integration tests when DB is not available
 exclude = if repo_available, do: [], else: [:integration]
