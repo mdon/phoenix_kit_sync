@@ -187,7 +187,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     pid = self()
 
     Enum.each(receiver_connections, fn conn ->
-      Task.start(fn ->
+      # Linked: if the LiveView dies, cancel the display fetch — there's no
+      # one left to render the result.
+      Task.start_link(fn ->
         status = resolve_sender_status(conn)
         send(pid, {:sender_status_fetched, conn.uuid, status})
       end)
@@ -221,7 +223,8 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   end
 
   defp verify_single_connection(conn, pid) do
-    Task.start(fn ->
+    # Linked: verify-on-mount is display-only — cancel if the LV dies.
+    Task.start_link(fn ->
       handle_verification_result(ConnectionNotifier.verify_connection(conn), conn.uuid, pid)
     end)
   end
@@ -303,8 +306,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.approve_connection(connection, current_user.uuid) do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        # Fire-and-forget: the DB change is committed; the remote site must
+        # hear about it even if the admin closes the tab.
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "active")
         end)
 
@@ -326,8 +330,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.suspend_connection(connection, current_user.uuid) do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "suspended")
         end)
 
@@ -348,8 +351,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.reactivate_connection(connection) do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "active")
         end)
 
@@ -371,8 +373,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.revoke_connection(connection, current_user.uuid, "Revoked by admin") do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "revoked")
         end)
 
@@ -408,8 +409,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_event("delete_connection", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
 
-    # Notify the remote site about the deletion (async)
-    Task.start(fn ->
+    notify_remote_async(fn ->
       ConnectionNotifier.notify_delete(connection)
     end)
 
@@ -715,7 +715,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_info({:fetch_sender_tables, connection}, socket) do
     liveview_pid = self()
 
-    Task.start(fn ->
+    # Linked: result is only used to render the table picker; no point
+    # continuing if the LV is gone.
+    Task.start_link(fn ->
       result = ConnectionNotifier.fetch_sender_tables(connection)
       send(liveview_pid, {:sender_tables_result, result})
     end)
@@ -756,7 +758,8 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_info({:fetch_table_schema, connection, table_name}, socket) do
     liveview_pid = self()
 
-    Task.start(fn ->
+    # Linked: schema fetch is render-only.
+    Task.start_link(fn ->
       result = ConnectionNotifier.fetch_table_schema(connection, table_name)
       send(liveview_pid, {:table_schema_result, table_name, result})
     end)
@@ -795,7 +798,8 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_info({:fetch_preview_records, connection, table_name, filter}, socket) do
     liveview_pid = self()
 
-    Task.start(fn ->
+    # Linked: record preview is render-only.
+    Task.start_link(fn ->
       opts =
         case filter.mode do
           :all ->
@@ -843,7 +847,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     liveview_pid = self()
     strategy = socket.assigns.conflict_strategy
 
-    Task.start(fn ->
+    # Supervised: this actually mutates the local DB mid-stream; cancelling
+    # mid-flight would leave partial imports. Let it run to completion and
+    # report its result even if the admin navigated away.
+    notify_remote_async(fn ->
       opts =
         case filter.mode do
           :all ->
@@ -936,7 +943,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     socket = assign(socket, :sync_progress, progress)
 
-    Task.start(fn ->
+    # Supervised: same reason as detail sync above — importer writes to the
+    # local DB and must finish even if the LV dies.
+    notify_remote_async(fn ->
       case ConnectionNotifier.pull_table_data_with_remap(
              connection,
              table,
@@ -2960,7 +2969,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         "| remote_url=#{connection.site_url}"
     )
 
-    Task.start(fn -> log_remote_notification(connection, token) end)
+    notify_remote_async(fn -> log_remote_notification(connection, token) end)
   end
 
   defp maybe_notify_remote(_connection, _token), do: :ok
@@ -2978,5 +2987,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             "| message=#{inspect(r.message)}"
         )
     end
+  end
+
+  # Supervised, fire-and-forget. These tasks notify the remote site about a
+  # committed local change; the DB transaction has already succeeded, so the
+  # remote should learn about it even if the admin closes the tab. Linked
+  # start (Task.start_link) is wrong here — it'd cancel the HTTP call when
+  # the LV dies and leave the remote stale.
+  defp notify_remote_async(fun) when is_function(fun, 0) do
+    Task.Supervisor.start_child(PhoenixKit.TaskSupervisor, fun, restart: :temporary)
   end
 end

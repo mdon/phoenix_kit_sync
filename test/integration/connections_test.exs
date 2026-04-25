@@ -477,5 +477,43 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       assert_receive {:connection_updated, uuid}
       assert uuid == conn.uuid
     end
+
+    # Regression: string-keyed attrs (e.g. from a LiveView form) used to make
+    # every field look "changed" because Map.get(%Connection{}, "status")
+    # always returned nil, never matching the string-keyed value. That
+    # incorrectly fired :connection_updated on no-op saves and routed real
+    # status changes to :connection_updated instead of :connection_status_changed.
+    test "update_connection with string-keyed status attr fires :connection_status_changed" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://pubsub-string-status-#{System.unique_integer([:positive])}.com"
+        })
+
+      assert_receive {:connection_created, _}
+
+      {:ok, _} = Connections.update_connection(conn, %{"status" => "active"})
+      assert_receive {:connection_status_changed, uuid, "active"}
+      assert uuid == conn.uuid
+
+      refute_receive {:connection_updated, _}, 50
+    end
+
+    test "update_connection with no actual change emits no stale broadcast" do
+      conn =
+        create_connection(%{
+          "name" => "No-op Name",
+          "site_url" => "https://pubsub-noop-#{System.unique_integer([:positive])}.com"
+        })
+
+      assert_receive {:connection_created, _}
+
+      # Submit the same name via a string-keyed attr map. Before the
+      # atom-key normalization fix this would broadcast :connection_updated
+      # because the comparison mis-read the struct.
+      {:ok, _} = Connections.update_connection(conn, %{"name" => "No-op Name"})
+
+      refute_receive {:connection_updated, _}, 50
+      refute_receive {:connection_status_changed, _, _}, 50
+    end
   end
 end

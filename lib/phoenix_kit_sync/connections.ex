@@ -295,24 +295,7 @@ defmodule PhoenixKitSync.Connections do
     |> repo.update()
     |> tap(fn
       {:ok, updated} ->
-        changed_fields =
-          attrs
-          |> Enum.reject(fn {k, v} -> Map.get(connection, k) == v end)
-          |> Enum.map(fn {k, _v} -> k end)
-
-        if changed_fields != [] do
-          Logger.info(
-            "[Sync.Connections] Connection updated " <>
-              "| uuid=#{updated.uuid} " <>
-              "| changed=#{inspect(changed_fields)}"
-          )
-        end
-
-        if :status in changed_fields or "status" in changed_fields do
-          broadcast({:connection_status_changed, updated.uuid, updated.status})
-        else
-          broadcast({:connection_updated, updated.uuid})
-        end
+        broadcast_connection_update(connection, updated, detect_changed_fields(connection, attrs))
 
       {:error, changeset} ->
         Logger.warning(
@@ -322,6 +305,57 @@ defmodule PhoenixKitSync.Connections do
         )
     end)
   end
+
+  # No changed fields = no-op save. Skip the log line AND the PubSub
+  # broadcast; subscribers don't need to re-render their view of something
+  # that didn't move. Pre-fix this branch was unreachable because string-
+  # keyed attrs always looked "changed" via Map.get-returns-nil.
+  defp broadcast_connection_update(_connection, _updated, []), do: :ok
+
+  defp broadcast_connection_update(_connection, updated, changed_fields) do
+    Logger.info(
+      "[Sync.Connections] Connection updated " <>
+        "| uuid=#{updated.uuid} " <>
+        "| changed=#{inspect(changed_fields)}"
+    )
+
+    if :status in changed_fields or "status" in changed_fields do
+      broadcast({:connection_status_changed, updated.uuid, updated.status})
+    else
+      broadcast({:connection_updated, updated.uuid})
+    end
+  end
+
+  # Returns the subset of `attrs` whose values differ from the struct. Works
+  # for both atom-keyed (internal) and string-keyed (LiveView form) attrs:
+  # string keys are resolved against the struct via `String.to_existing_atom`
+  # so a typoed or unknown key doesn't crash and isn't falsely flagged as
+  # "changed". Without this, a form submit with `%{"status" => "active"}`
+  # against a struct's atom-keyed `:status` would make every field look
+  # changed (because `Map.get(struct, "status")` is always `nil`) and fire a
+  # misleading `:connection_updated` broadcast.
+  defp detect_changed_fields(%Connection{} = connection, attrs) do
+    Enum.reduce(attrs, [], fn {k, v}, acc ->
+      field = resolve_struct_key(k)
+
+      cond do
+        is_nil(field) -> acc
+        Map.get(connection, field) == v -> acc
+        true -> [k | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp resolve_struct_key(k) when is_atom(k), do: k
+
+  defp resolve_struct_key(k) when is_binary(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp resolve_struct_key(_), do: nil
 
   @doc """
   Deletes a connection.

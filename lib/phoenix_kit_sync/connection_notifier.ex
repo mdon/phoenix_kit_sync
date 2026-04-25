@@ -1261,6 +1261,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
 
   defp import_table_data(table_name, data, conflict_strategy) when is_list(data) do
     repo = PhoenixKit.RepoHelper.repo()
+    numeric_cols = fetch_numeric_columns(table_name)
 
     Logger.info("Sync: Importing #{length(data)} records into #{table_name}")
 
@@ -1268,7 +1269,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     results =
       Enum.reduce(data, %{imported: 0, skipped: 0, errors: 0, error_sample: nil}, fn record,
                                                                                      acc ->
-        insert_record(repo, table_name, record, conflict_strategy)
+        insert_record(repo, table_name, record, conflict_strategy, numeric_cols)
         |> accumulate_import_result(acc)
       end)
 
@@ -1308,12 +1309,20 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         _ -> []
       end
 
+    # Cache the set of numeric/decimal columns once per table so the per-value
+    # decimal-string detection in prepare_value/3 stays scoped to the columns
+    # where a "3.14" really is meant to become a %Decimal{}. Applying the
+    # regex to every string column would mis-cast version numbers or text
+    # labels and trip Postgrex type errors.
+    numeric_cols = fetch_numeric_columns(table_name)
+
     import_ctx = %{
       repo: repo,
       table_name: table_name,
       pk_col: pk_col,
       fk_columns: fk_columns,
       unique_sets: unique_sets,
+      numeric_cols: numeric_cols,
       conflict_strategy: conflict_strategy
     }
 
@@ -1362,7 +1371,13 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         remapped_record = apply_fk_remap(record, ctx.fk_columns, remap)
 
         updated_acc =
-          insert_record(ctx.repo, ctx.table_name, remapped_record, ctx.conflict_strategy)
+          insert_record(
+            ctx.repo,
+            ctx.table_name,
+            remapped_record,
+            ctx.conflict_strategy,
+            ctx.numeric_cols
+          )
           |> accumulate_import_result(acc)
 
         {updated_acc, remap}
@@ -1483,7 +1498,8 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     %{acc | errors: acc.errors + 1}
   end
 
-  defp insert_record(repo, table_name, record, conflict_strategy) when is_map(record) do
+  defp insert_record(repo, table_name, record, conflict_strategy, numeric_cols)
+       when is_map(record) do
     pk_col = PhoenixKit.RepoHelper.get_pk_column(table_name)
 
     # For append strategy, strip primary key to let DB auto-generate new ID
@@ -1497,7 +1513,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     # Normalize all keys to strings for consistent SQL generation
     record = normalize_record_keys(record)
     columns = Map.keys(record)
-    values = Map.values(record) |> Enum.map(&prepare_value/1)
+
+    values =
+      Enum.map(columns, fn col ->
+        prepare_value(Map.get(record, col), col, numeric_cols)
+      end)
 
     placeholders =
       columns
@@ -1515,7 +1535,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
       {:error, Exception.message(e)}
   end
 
-  defp insert_record(_repo, _table_name, _record, _strategy), do: :error
+  defp insert_record(_repo, _table_name, _record, _strategy, _numeric_cols), do: :error
 
   defp build_on_conflict_clause("overwrite", pk_col, columns) do
     ~s[ON CONFLICT ("#{pk_col}") DO UPDATE SET #{build_update_clause(columns, pk_col)}]
@@ -1546,7 +1566,22 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     |> Enum.map_join(", ", fn col -> ~s["#{col}" = EXCLUDED."#{col}"] end)
   end
 
-  # Convert ISO8601 strings to DateTime/Date/Time structs for Postgrex
+  # 3-arity variant: knows which column the value is for, so decimal-string
+  # detection fires only on numeric/decimal columns. Non-binary values or
+  # values whose column isn't numeric fall through to prepare_value/1.
+  defp prepare_value(value, column, numeric_cols)
+       when is_binary(value) and is_binary(column) and is_list(numeric_cols) do
+    parse_datetime_string(value) || parse_date_string(value) || parse_time_string(value) ||
+      if(column in numeric_cols, do: parse_decimal_string(value)) ||
+      value
+  end
+
+  defp prepare_value(value, _column, _numeric_cols), do: prepare_value(value)
+
+  # 1-arity variant: kept for the non-import call sites (check_pk_exists,
+  # find_match_by_unique) where we're building a single parameterized query
+  # and the values are primary keys or unique-column keys — not free-text —
+  # so the broad decimal regex is fine.
   defp prepare_value(value) when is_binary(value) do
     parse_datetime_string(value) || parse_date_string(value) || parse_time_string(value) ||
       parse_decimal_string(value) || value
@@ -1560,6 +1595,24 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   end
 
   defp prepare_value(value), do: value
+
+  # Build the list of numeric/decimal column names for a table, once per
+  # import batch. Missing or unreachable tables degrade to an empty list so
+  # prepare_value/3 falls through to the safe "don't try to coerce" branch.
+  # A list (rather than MapSet) keeps the opaque type flowing cleanly through
+  # the untyped import_ctx map without Dialyzer friction; n is small enough
+  # that `column in list` membership is trivial.
+  defp fetch_numeric_columns(table_name) do
+    case SchemaInspector.get_schema(table_name) do
+      {:ok, %{columns: columns}} ->
+        columns
+        |> Enum.filter(fn col -> col.type in ~w[numeric decimal double precision real] end)
+        |> Enum.map(& &1.name)
+
+      _ ->
+        []
+    end
+  end
 
   # Record field helpers — records may have string or atom keys depending on
   # whether they came from JSON (string keys) or internal code (atom keys).
