@@ -65,10 +65,25 @@ defmodule PhoenixKitSync.DataImporter do
 
     with {:ok, schema} <- SchemaInspector.get_schema(table),
          primary_keys <- get_primary_keys(schema) do
+      # Single pre-pass: fetch every existing row this batch might conflict
+      # with in one SELECT, keyed by PK value, instead of running one SELECT
+      # per record. For :append there's nothing to look up. Composite PKs
+      # fall back to the empty map and per-record find_existing — the
+      # composite case is rare across phoenix_kit schemas (all use a single
+      # UUIDv7 PK) and would need a row-constructor IN clause to batch.
+      existing_by_pk = prefetch_existing(repo, table, records, primary_keys, strategy)
+
       result =
-        records
-        |> Enum.reduce(%{created: 0, updated: 0, skipped: 0, errors: []}, fn record, acc ->
-          accumulate_import_result(acc, repo, table, record, primary_keys, strategy)
+        Enum.reduce(records, %{created: 0, updated: 0, skipped: 0, errors: []}, fn record, acc ->
+          accumulate_import_result(
+            acc,
+            repo,
+            table,
+            record,
+            primary_keys,
+            strategy,
+            existing_by_pk
+          )
         end)
 
       {:ok, %{result | errors: Enum.reverse(result.errors)}}
@@ -108,8 +123,8 @@ defmodule PhoenixKitSync.DataImporter do
   # Single Record Import
   # ============================================================================
 
-  defp accumulate_import_result(acc, repo, table, record, primary_keys, strategy) do
-    case import_single_record(repo, table, record, primary_keys, strategy) do
+  defp accumulate_import_result(acc, repo, table, record, primary_keys, strategy, existing_by_pk) do
+    case import_single_record(repo, table, record, primary_keys, strategy, existing_by_pk) do
       {:ok, :created} -> %{acc | created: acc.created + 1}
       {:ok, :updated} -> %{acc | updated: acc.updated + 1}
       {:ok, :skipped} -> %{acc | skipped: acc.skipped + 1}
@@ -117,7 +132,7 @@ defmodule PhoenixKitSync.DataImporter do
     end
   end
 
-  defp import_single_record(repo, table, record, primary_keys, :append) do
+  defp import_single_record(repo, table, record, primary_keys, :append, _existing) do
     # For append strategy: strip primary keys and insert as new record
     record = prepare_record(record)
     record_without_pk = Map.drop(record, primary_keys)
@@ -128,21 +143,89 @@ defmodule PhoenixKitSync.DataImporter do
       {:error, Exception.message(e)}
   end
 
-  defp import_single_record(repo, table, record, primary_keys, strategy) do
-    # Prepare the record with proper types
+  defp import_single_record(repo, table, record, primary_keys, strategy, existing_by_pk) do
     record = prepare_record(record)
 
-    case find_existing(repo, table, record, primary_keys) do
-      nil ->
+    # Fast path: lookup in the pre-fetched map. Composite PKs (or any record
+    # whose PKs weren't fetchable) fall through to a per-record
+    # find_existing call so correctness isn't traded for the optimisation.
+    case lookup_existing(record, primary_keys, existing_by_pk) do
+      {:hit, nil} ->
         insert_record(repo, table, record)
 
-      existing ->
+      {:hit, existing} ->
         handle_conflict(repo, table, existing, record, primary_keys, strategy)
+
+      :miss ->
+        case find_existing(repo, table, record, primary_keys) do
+          nil -> insert_record(repo, table, record)
+          existing -> handle_conflict(repo, table, existing, record, primary_keys, strategy)
+        end
     end
   rescue
     e ->
       Logger.warning("DataImporter: Error importing record - #{inspect(e)}")
       {:error, Exception.message(e)}
+  end
+
+  # Batch-fetches every row whose PK matches any record in the incoming
+  # batch, returning `%{pk_value => row}`. Only the single-PK case is
+  # batched — multi-column PKs need a row-constructor IN clause which isn't
+  # worth the complexity until a phoenix_kit table actually uses a
+  # composite PK. Returns an empty map for :append (no conflict check
+  # needed) and for any case that can't safely batch; the caller falls back
+  # to the per-record `find_existing/4` path.
+  defp prefetch_existing(_repo, _table, _records, _primary_keys, :append), do: %{}
+  defp prefetch_existing(_repo, _table, _records, [], _strategy), do: %{}
+  defp prefetch_existing(_repo, _table, _records, [_, _ | _], _strategy), do: %{}
+
+  defp prefetch_existing(repo, table, records, [pk], _strategy) do
+    pk_values = extract_pk_values(records, pk)
+
+    with :ok <- validate_identifiers([table, pk]),
+         false <- pk_values == [] do
+      sql = ~s[SELECT * FROM "#{table}" WHERE "#{pk}" = ANY($1)]
+      run_prefetch_query(repo, sql, pk_values, pk)
+    else
+      _ -> %{}
+    end
+  end
+
+  defp extract_pk_values(records, pk) do
+    records
+    |> Enum.map(fn record ->
+      prepared = prepare_record(record)
+      Map.get(prepared, pk) || Map.get(prepared, safe_atom(pk))
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp run_prefetch_query(repo, sql, pk_values, pk) do
+    case repo.query(sql, [pk_values]) do
+      {:ok, %{rows: rows, columns: columns}} -> index_rows_by_pk(rows, columns, pk)
+      _ -> %{}
+    end
+  end
+
+  defp index_rows_by_pk(rows, columns, pk) do
+    Map.new(rows, fn row ->
+      row_map = Enum.zip(columns, row) |> Map.new()
+      {Map.get(row_map, pk), row_map}
+    end)
+  end
+
+  # Returns {:hit, existing_or_nil} when the prefetch covers this record
+  # (single-PK case with a resolvable PK value), or :miss when the caller
+  # should fall back to find_existing/4 (composite PK or missing PK value).
+  defp lookup_existing(_record, [], _existing_by_pk), do: :miss
+  defp lookup_existing(_record, [_, _ | _], _existing_by_pk), do: :miss
+
+  defp lookup_existing(record, [pk], existing_by_pk) do
+    case Map.get(record, pk) || Map.get(record, safe_atom(pk)) do
+      nil -> :miss
+      pk_value -> {:hit, Map.get(existing_by_pk, pk_value)}
+    end
   end
 
   defp find_existing(_repo, _table, _record, []) do
