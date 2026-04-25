@@ -2964,19 +2964,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     |> assign(:form, to_form(changeset, as: :connection))
   end
 
-  # Supervised, fire-and-forget. These tasks notify the remote site about a
-  # committed local change; the DB transaction has already succeeded, so the
-  # remote should learn about it even if the admin closes the tab. Linked
-  # start (Task.start_link) is wrong here — it'd cancel the HTTP call when
-  # the LV dies and leave the remote stale.
-  #
-  # If the TaskSupervisor isn't running (e.g. in test env where the parent
-  # app's supervisor isn't booted), fall back to bare Task.start so the
-  # primary operation isn't blocked. We don't crash the LiveView over a
-  # missing supervisor.
-  defp notify_remote_async(fun) when is_function(fun, 0) do
-    Task.Supervisor.start_child(PhoenixKit.TaskSupervisor, fun, restart: :temporary)
-  catch
-    :exit, _ -> Task.start(fun)
-  end
+  # Delegate to PhoenixKitSync.AsyncTasks for the actual supervision. The
+  # logic + tests live there; this LV just calls the helper.
+  defp notify_remote_async(fun), do: PhoenixKitSync.AsyncTasks.notify_remote_async(fun)
 end

@@ -266,4 +266,29 @@ defmodule PhoenixKitSync.Integration.TransfersTest do
       )
     end
   end
+
+  describe "update_progress/2 (high-frequency, intentionally not activity-logged)" do
+    test "updates progress fields without writing an activity row" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "progress_pin_table",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, started} = Transfers.start_transfer(transfer)
+
+      {:ok, updated} =
+        Transfers.update_progress(started, %{records_transferred: 100, bytes_transferred: 4_096})
+
+      assert updated.records_transferred == 100
+      assert updated.bytes_transferred == 4_096
+
+      # No activity row for progress updates — the per-batch
+      # Transfers.create_transfer audit row already covers each batch.
+      refute_activity_logged("sync.transfer.progress_updated", resource_uuid: transfer.uuid)
+    end
+  end
 end

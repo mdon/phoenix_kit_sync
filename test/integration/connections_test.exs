@@ -664,4 +664,50 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       refute Map.has_key?(metadata, "auth_token")
     end
   end
+
+  describe "stats-tracker mutations (high-frequency, intentionally not activity-logged)" do
+    # These three mutations don't write to phoenix_kit_activities (the
+    # `Transfers.create_transfer/2` row already covers each batch). The
+    # tests pin the function shape so reverts don't go unnoticed.
+
+    test "record_transfer/2 increments stats counters" do
+      conn = create_connection()
+
+      {:ok, updated} =
+        Connections.record_transfer(conn, %{records_count: 50, bytes_count: 2_000})
+
+      assert updated.downloads_used == (conn.downloads_used || 0) + 1
+      assert updated.records_downloaded == (conn.records_downloaded || 0) + 50
+      assert updated.total_records_transferred == (conn.total_records_transferred || 0) + 50
+      assert updated.total_bytes_transferred == (conn.total_bytes_transferred || 0) + 2_000
+      assert updated.last_connected_at != nil
+      assert updated.last_transfer_at != nil
+    end
+
+    test "touch_connected/1 updates only last_connected_at" do
+      conn = create_connection()
+      original_records = conn.records_downloaded || 0
+
+      {:ok, updated} = Connections.touch_connected(conn)
+
+      assert updated.last_connected_at != nil
+      # Stats counters are NOT incremented by touch_connected.
+      assert updated.records_downloaded == original_records
+    end
+
+    test "regenerate_token/1 returns {:ok, conn, raw_token} with a fresh token" do
+      conn = create_connection()
+      original_hash = conn.auth_token_hash
+
+      {:ok, updated, new_token} = Connections.regenerate_token(conn)
+
+      assert is_binary(new_token)
+      assert byte_size(new_token) > 16
+      assert updated.auth_token_hash != original_hash
+      # The hash matches the SHA-256 of the new token (verifies the
+      # token returned IS the one stored, not a different value).
+      expected_hash = :crypto.hash(:sha256, new_token) |> Base.encode16(case: :lower)
+      assert updated.auth_token_hash == expected_hash
+    end
+  end
 end

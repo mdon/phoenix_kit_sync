@@ -131,6 +131,15 @@ Application.put_env(:phoenix_kit_sync, :test_repo_available, repo_available)
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
 
+# Start PhoenixKit.TaskSupervisor so PhoenixKitSync.AsyncTasks can route
+# fire-and-forget tasks through the named supervisor as it does in
+# production. Without this, the helper's `:exit` fallback fires and tests
+# can't distinguish supervised from bare `Task.start`.
+case Task.Supervisor.start_link(name: PhoenixKit.TaskSupervisor) do
+  {:ok, _pid} -> :ok
+  {:error, {:already_started, _pid}} -> :ok
+end
+
 # Start the test endpoint so Phoenix.LiveViewTest.live/2 can drive
 # LiveViews through `/en/admin/sync/*` URLs. Only when the DB is
 # available (otherwise integration tests are excluded anyway).
