@@ -275,7 +275,160 @@ fixed unilaterally per the workspace
   core `<.input>` / `<.select>` / `<.textarea>`. Smaller surface than
   the AI module's `prompt_form` rewrite.
 
+## Batch 3 — fix-everything pass 2026-04-26
+
+Authorised after Batch 2 surfaced four deferrable items. Closes A
+(SSRF), B (activity-logging gaps), C (`@spec` backfill), and D
+(component refactor — see correction below).
+
+### Fixed in Batch 3
+
+**(A) SSRF guard on `connection.site_url`.** Added
+`validate_base_url/1` and helpers to `Connection.changeset/2`
+(`connection.ex:202-274`). Rejects:
+- non-`http`/`https` schemes (`file://`, `gopher://`, `javascript:`)
+- empty / missing host
+- `localhost` literal
+- `*.local` mDNS hostnames
+- IPv4 literals in `0/8`, `10/8`, `127/8`, `169.254/16`, `172.16/12`,
+  `192.168/16`
+- IPv6 literals `::`, `::1`, `fe80::/10`, `fc00::/7`
+
+Opt-in bypass via
+`config :phoenix_kit_sync, allow_internal_urls: true` (defaults
+`false` in production; test config flips it on so the existing
+localhost-targeted integration tests work, and the dedicated SSRF
+test suite explicitly toggles it back to `false`). Pinned by
+`test/phoenix_kit_sync/connection_ssrf_test.exs` — 20 tests covering
+each rejection range, scheme-only-no-host, the bypass behaviour, and
+that scheme rejection still fires when bypass is set.
+
+**(B) Activity-logging gaps.** Two gaps:
+1. `update_connection/2` had **zero** activity logging on any branch
+   (`connections.ex:340-368`). Promoted signature to
+   `update_connection/3` with `opts \\ []` (backward-compat — the
+   `\\` keeps 2-arity callers working). Both branches now log
+   `sync.connection.updated`: `:ok` carries
+   `metadata.changed_fields = [...]` (atom/string-key normalised to
+   strings); `:error` carries the same plus `db_pending: true`.
+   Updated `connections_live.ex:1313` (`do_update_connection/2`) to
+   thread `actor_uuid: socket.assigns.phoenix_kit_current_scope.user.uuid`.
+   The system-driven receiver-severed handler at
+   `connections_live.ex:999` keeps `actor_uuid: nil` (no admin
+   actor — the suspension is auto-fired by a remote PubSub).
+2. Five status-mutation `:error` branches were silent. Added
+   `log_sync_activity("<verb>", connection, opts, %{"db_pending" => true})`
+   to the error path of `delete_connection`, `approve_connection`,
+   `suspend_connection`, `revoke_connection`, `reactivate_connection`
+   (`connections.ex:436, 478-480, 519-522, 558-561, 583`). Suspend
+   and revoke also carry `"reason"` in the error metadata so the
+   audit trail captures the user's intent on a failed save.
+
+Pinned by `test/phoenix_kit_sync/connections_activity_test.exs` —
+8 tests: `update_connection/3` `:ok` + `:error` branches with metadata
+assertions (forced `:error` via `max_records_per_request: -1`
+violating the `validate_number(greater_than: 0)` rule), and structural
+source pins for the five status-mutation `:error` log calls (the
+`change/2`-based changesets don't fail validation in normal operation,
+so these branches are runtime-only — the pins keep a future refactor
+from silently dropping the log).
+
+**(C) `@spec` backfill.** Added 14 `@spec` declarations across the
+two schema modules (the four context modules were already covered):
+- `lib/phoenix_kit_sync/connection.ex` — 7 changeset specs
+  (`changeset`, `approve_changeset`, `suspend_changeset`,
+  `revoke_changeset`, `reactivate_changeset`, `stats_changeset`,
+  `settings_changeset`) + 9 helper specs (`verify_auth_token`,
+  `verify_download_password`, `generate_auth_token`, `active?`,
+  `expired?`, `within_download_limits?`, `within_record_limits?`,
+  `within_allowed_hours?`, `ip_allowed?/1`, `ip_allowed?/2`,
+  `requires_approval?`, `table_allowed?`).
+- `lib/phoenix_kit_sync/transfer.ex` — 16 specs covering all 11
+  changeset functions and 5 predicate / utility helpers.
+- Widened `Connections.get_connection/1` and `Transfers.get_transfer/1`
+  specs from `String.t()` to `String.t() | any()` so the catch-all
+  `def get_X(_), do: nil` clause is type-correct.
+
+**(D) Component refactor — N/A on closer inspection.** The C12 agent
+report counted "4 raw `<input>` / `<select>` / `<textarea>` not yet
+swapped to core". Detailed inspection of every match shows:
+- All 4 `<select>` elements (`connections_live.ex:2179, 2452, 2696`,
+  `receiver.ex:1302`) are already wrapped in
+  `<label class="select ...">`, which is the canonical daisyUI 5
+  convention required by the workspace AGENTS.md ("daisyUI 5 selects
+  must use the wrapper pattern").
+- The 2 `<input>` elements (`connections_live.ex:1683`,
+  `history.ex:626`) are both `type="hidden"` carrying static
+  values — `<.input>` provides error-rendering on top of raw HTML
+  inputs; for hidden inputs with no field binding, raw is clearer.
+
+No refactor landed for D. The original "4 raw elements" was a
+miscount by the triage agent. Adopting `<.input type="hidden">`
+purely for consistency would not improve any user-visible
+behaviour and is not worth the diff.
+
+### Pinning tests added (Batch 3)
+
+| Change | Pinning test |
+|--------|--------------|
+| `validate_base_url/1` scheme rejection | 5 tests (file, gopher, javascript, http, https) |
+| `validate_base_url/1` host rejection | 1 test (scheme-only, no host) |
+| RFC1918 / loopback / link-local rejection | 8 tests covering 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fe80::/10, fc00::/7 |
+| Localhost / .local rejection | 2 tests |
+| `allow_internal_urls` bypass | 4 tests (localhost / RFC1918 / ::1 acceptance + scheme check still fires) |
+| `update_connection/3` `:ok` activity log | 2 tests (with + without actor_uuid) |
+| `update_connection/3` `:error` activity log | 1 test asserting `db_pending: true` + `changed_fields` |
+| 5 status-mutation `:error` branches | 5 source-grep structural pins |
+
+`mix test` 553 → **581** (+28 net for Batch 3, +44 cumulative since
+the original sweep), 10/10 stable.
+
+### Files touched (Batch 3)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_sync/connection.ex` | `validate_base_url/1` + `internal_host?/1` + `internal_ip?/1` (~75 lines); 14 schema specs |
+| `lib/phoenix_kit_sync/transfer.ex` | 16 specs |
+| `lib/phoenix_kit_sync/connections.ex` | `update_connection/3` arity bump + activity log on both branches; `:error`-branch logs on 5 mutations; `get_connection/1` spec widened |
+| `lib/phoenix_kit_sync/transfers.ex` | `get_transfer/1` spec widened |
+| `lib/phoenix_kit_sync/web/connections_live.ex` | thread `actor_uuid:` through `do_update_connection/2` |
+| `config/test.exs` | `config :phoenix_kit_sync, allow_internal_urls: true` (test bypass) |
+| `test/phoenix_kit_sync/connection_ssrf_test.exs` | New — +20 SSRF tests |
+| `test/phoenix_kit_sync/connections_activity_test.exs` | New — +8 activity-logging tests |
+
+### Verification (Batch 3)
+
+- `mix compile --warnings-as-errors` — clean
+- `mix format --check-formatted` — clean
+- `mix credo --strict` — 0 issues
+- `mix dialyzer` — 0 errors (9 skipped via `.dialyzer_ignore.exs`,
+  all pre-existing)
+- `mix test` — **581 tests, 0 failures, 10/10 stable consecutive runs**
+  (baseline was 536 pre-Batch-2)
+- Stale-ref greps clean: no `IO.inspect`/`puts`/`warn` outside `@doc`,
+  no `# TODO`/`# FIXME`/`# HACK`/`# XXX`, no `String.capitalize`, no
+  `Task.start` (the lone match in `async_tasks.ex:28` is the
+  documented `:exit` rescue fallback for when
+  `PhoenixKit.TaskSupervisor` isn't running), no commented-out
+  `def`/`case`/`if` lines.
+- Browser smoke (Sync overview / Connections / History admin pages)
+  renders identical structure to the Batch 2 snapshots; SSRF guard
+  is invisible to admins using public hostnames.
+
+### Production behaviour change
+
+The SSRF guard rejects `connection.site_url` values pointing at
+internal addresses by default. **Deployments that legitimately use
+localhost / RFC1918** (multi-tenant on the same host, internal
+staging, self-hosted Ollama-style instances) need to set
+`config :phoenix_kit_sync, allow_internal_urls: true` in their host
+app. The error message on rejection includes that hint:
+`"cannot point at private/loopback/link-local addresses (set
+allow_internal_urls if you need this)"`. AGENTS.md "What This Module
+Does NOT Have" was already updated in Batch 2 to flag the lack of
+default allowlist; the Batch 3 guard supersedes that note (which
+should be re-worded post-merge).
+
 ## Open
 
-None — see "Surfaced for Max's decision" for items deferred pending
-fix-everything authorisation.
+None.

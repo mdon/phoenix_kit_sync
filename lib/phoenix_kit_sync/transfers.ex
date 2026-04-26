@@ -145,7 +145,7 @@ defmodule PhoenixKitSync.Transfers do
   Accepts:
   - UUID string: `get_transfer("01234567-89ab-cdef-0123-456789abcdef")`
   """
-  @spec get_transfer(String.t()) :: Transfer.t() | nil
+  @spec get_transfer(String.t() | any()) :: Transfer.t() | nil
   def get_transfer(uuid) when is_binary(uuid) do
     repo = RepoHelper.repo()
 

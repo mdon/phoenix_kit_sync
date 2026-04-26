@@ -16,6 +16,14 @@ config :phoenix_kit, repo: PhoenixKitSync.Test.Repo
 
 config :logger, level: :warning
 
+# Bypass the SSRF guard on `connection.site_url` so integration tests
+# that point at `http://localhost:<port>` (e.g.
+# `connection_notifier_test.exs` against the test endpoint) accept
+# the URL. Production defaults to `false`. The dedicated SSRF test
+# suite explicitly flips this back to `false` to verify the
+# rejections.
+config :phoenix_kit_sync, allow_internal_urls: true
+
 # Test endpoint config — used by LiveView tests via
 # `Phoenix.LiveViewTest.live/2`. Real production uses the host app's
 # endpoint; this one is a minimal shim defined in

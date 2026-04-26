@@ -146,6 +146,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Creates a changeset for connection creation.
   """
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(connection, attrs) do
     connection
     |> cast(attrs, [
@@ -177,6 +178,7 @@ defmodule PhoenixKitSync.Connection do
       :created_by_uuid
     ])
     |> validate_required([:name, :direction, :site_url])
+    |> validate_base_url()
     |> validate_inclusion(:direction, @valid_directions)
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_inclusion(:approval_mode, @valid_approval_modes)
@@ -199,6 +201,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Changeset for approving a connection.
   """
+  @spec approve_changeset(t(), String.t() | map() | nil) :: Ecto.Changeset.t()
   def approve_changeset(connection, admin_user_uuid) do
     connection
     |> change(%{
@@ -211,6 +214,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Changeset for suspending a connection.
   """
+  @spec suspend_changeset(t(), String.t() | map() | nil, String.t() | nil) :: Ecto.Changeset.t()
   def suspend_changeset(connection, admin_user_uuid, reason \\ nil) do
     connection
     |> change(%{
@@ -224,6 +228,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Changeset for revoking a connection.
   """
+  @spec revoke_changeset(t(), String.t() | map() | nil, String.t() | nil) :: Ecto.Changeset.t()
   def revoke_changeset(connection, admin_user_uuid, reason \\ nil) do
     connection
     |> change(%{
@@ -237,6 +242,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Changeset for reactivating a suspended connection.
   """
+  @spec reactivate_changeset(t()) :: Ecto.Changeset.t()
   def reactivate_changeset(connection) do
     connection
     |> change(%{
@@ -250,6 +256,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Changeset for updating connection statistics.
   """
+  @spec stats_changeset(t(), map()) :: Ecto.Changeset.t()
   def stats_changeset(connection, attrs) do
     connection
     |> cast(attrs, [
@@ -266,6 +273,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Changeset for updating connection settings.
   """
+  @spec settings_changeset(t(), map()) :: Ecto.Changeset.t()
   def settings_changeset(connection, attrs) do
     connection
     |> cast(attrs, [
@@ -356,6 +364,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Verifies an auth token against the stored hash.
   """
+  @spec verify_auth_token(t() | any(), String.t() | any()) :: boolean()
   def verify_auth_token(%__MODULE__{auth_token_hash: hash}, token)
       when is_binary(token) and is_binary(hash) do
     Plug.Crypto.secure_compare(hash_token(token), hash)
@@ -366,6 +375,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Verifies a download password against the stored hash.
   """
+  @spec verify_download_password(t() | any(), String.t() | any()) :: boolean()
   def verify_download_password(%__MODULE__{download_password_hash: nil}, _), do: true
   def verify_download_password(%__MODULE__{download_password_hash: ""}, _), do: true
 
@@ -379,6 +389,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Generates a secure random token for connection authentication.
   """
+  @spec generate_auth_token() :: String.t()
   def generate_auth_token do
     :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
   end
@@ -386,6 +397,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if a connection is currently active and within limits.
   """
+  @spec active?(t() | any()) :: boolean()
   def active?(%__MODULE__{status: "active"} = conn) do
     not expired?(conn) and within_download_limits?(conn) and within_record_limits?(conn)
   end
@@ -395,6 +407,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if a connection has expired.
   """
+  @spec expired?(t()) :: boolean()
   def expired?(%__MODULE__{expires_at: nil}), do: false
 
   def expired?(%__MODULE__{expires_at: expires_at}) do
@@ -404,6 +417,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if a connection is within download limits.
   """
+  @spec within_download_limits?(t()) :: boolean()
   def within_download_limits?(%__MODULE__{max_downloads: nil}), do: true
 
   def within_download_limits?(%__MODULE__{max_downloads: max, downloads_used: used}) do
@@ -413,6 +427,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if a connection is within record limits.
   """
+  @spec within_record_limits?(t()) :: boolean()
   def within_record_limits?(%__MODULE__{max_records_total: nil}), do: true
 
   def within_record_limits?(%__MODULE__{max_records_total: max, records_downloaded: downloaded}) do
@@ -422,6 +437,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if current time is within allowed hours.
   """
+  @spec within_allowed_hours?(t()) :: boolean()
   def within_allowed_hours?(%__MODULE__{allowed_hours_start: nil}), do: true
   def within_allowed_hours?(%__MODULE__{allowed_hours_end: nil}), do: true
 
@@ -442,6 +458,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if an IP address is in the whitelist.
   """
+  @spec ip_allowed?(t()) :: boolean()
   def ip_allowed?(%__MODULE__{ip_whitelist: []}), do: true
   def ip_allowed?(%__MODULE__{ip_whitelist: nil}), do: true
 
@@ -450,6 +467,7 @@ defmodule PhoenixKitSync.Connection do
   # returns false for any connection that hasn't explicitly opted into a
   # whitelist — exactly the AGENTS.md:140 trap. Callers like SocketPlug
   # pass a real client IP, which previously hit the catch-all and 403'd.
+  @spec ip_allowed?(t() | any(), String.t() | any()) :: boolean()
   def ip_allowed?(%__MODULE__{ip_whitelist: []}, _ip), do: true
   def ip_allowed?(%__MODULE__{ip_whitelist: nil}, _ip), do: true
 
@@ -462,6 +480,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if a table requires approval based on the connection's approval mode.
   """
+  @spec requires_approval?(t() | any(), String.t() | any()) :: boolean()
   def requires_approval?(%__MODULE__{approval_mode: "auto_approve"}, _table), do: false
   def requires_approval?(%__MODULE__{approval_mode: "require_approval"}, _table), do: true
 
@@ -477,6 +496,7 @@ defmodule PhoenixKitSync.Connection do
   @doc """
   Checks if a table is allowed to be accessed.
   """
+  @spec table_allowed?(t(), String.t()) :: boolean()
   def table_allowed?(%__MODULE__{excluded_tables: excluded, allowed_tables: allowed}, table) do
     not_excluded = table not in excluded
 
@@ -492,4 +512,95 @@ defmodule PhoenixKitSync.Connection do
   # Resolves user UUID from any user identifier
   defp resolve_user_uuid(uuid) when is_binary(uuid), do: uuid
   defp resolve_user_uuid(_), do: nil
+
+  # ===========================================
+  # SSRF GUARD ON site_url
+  # ===========================================
+  #
+  # `site_url` flows from this changeset into outbound HTTP/WebSocket
+  # via `ConnectionNotifier.build_api_url/1` and
+  # `WebSocketClient.build_websocket_url/2`. Without a guard, an admin
+  # could create a connection pointing at internal services
+  # (`127.0.0.1:6379`, AWS metadata at `169.254.169.254`, intranet
+  # admin panels) and exfiltrate via the notifier flow.
+  #
+  # We default to a strict public-only allowlist; deployments that
+  # legitimately point at localhost / RFC1918 (multi-tenant on the
+  # same box, internal staging) opt in explicitly via
+  # `config :phoenix_kit_sync, allow_internal_urls: true`.
+  #
+  # DNS-rebinding attacks (host resolves to public IP at validate
+  # time, internal IP at request time) are out of scope — would need
+  # resolution at request time, which is racy. The acute threat we
+  # guard is the literal IP shape (cloud-metadata is always
+  # `169.254.169.254` literal).
+  defp validate_base_url(changeset) do
+    case get_field(changeset, :site_url) do
+      nil -> changeset
+      "" -> changeset
+      url when is_binary(url) -> validate_base_url_string(changeset, url)
+      _ -> add_error(changeset, :site_url, "must be a string")
+    end
+  end
+
+  defp validate_base_url_string(changeset, url) do
+    uri = URI.parse(url)
+
+    cond do
+      uri.scheme not in ["http", "https"] ->
+        add_error(changeset, :site_url, "must use http or https scheme")
+
+      is_nil(uri.host) or uri.host == "" ->
+        add_error(changeset, :site_url, "must include a hostname")
+
+      Application.get_env(:phoenix_kit_sync, :allow_internal_urls, false) ->
+        changeset
+
+      String.ends_with?(uri.host, ".local") ->
+        add_error(
+          changeset,
+          :site_url,
+          "cannot point at .local mDNS hostnames (set allow_internal_urls if you need this)"
+        )
+
+      uri.host == "localhost" ->
+        add_error(
+          changeset,
+          :site_url,
+          "cannot point at localhost (set allow_internal_urls if you need this)"
+        )
+
+      internal_host?(uri.host) ->
+        add_error(
+          changeset,
+          :site_url,
+          "cannot point at private/loopback/link-local addresses (set allow_internal_urls if you need this)"
+        )
+
+      true ->
+        changeset
+    end
+  end
+
+  defp internal_host?(host) when is_binary(host) do
+    case :inet.parse_address(to_charlist(host)) do
+      {:ok, ip} -> internal_ip?(ip)
+      _ -> false
+    end
+  end
+
+  # IPv4 ranges
+  defp internal_ip?({0, _, _, _}), do: true
+  defp internal_ip?({10, _, _, _}), do: true
+  defp internal_ip?({127, _, _, _}), do: true
+  defp internal_ip?({169, 254, _, _}), do: true
+  defp internal_ip?({172, b, _, _}) when b in 16..31, do: true
+  defp internal_ip?({192, 168, _, _}), do: true
+  # IPv6 — loopback `::1`, unspecified `::`, link-local `fe80::/10`,
+  # unique-local `fc00::/7`.
+  defp internal_ip?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
+  defp internal_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+  defp internal_ip?({a, _, _, _, _, _, _, _}) when a in 0xFC00..0xFDFF, do: true
+  defp internal_ip?({a, _, _, _, _, _, _, _}) when a in 0xFE80..0xFEBF, do: true
+  defp internal_ip?(_), do: false
 end

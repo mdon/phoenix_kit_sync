@@ -1310,7 +1310,13 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   end
 
   defp do_update_connection(socket, params) do
-    case Connections.update_connection(socket.assigns.selected_connection, params) do
+    actor_uuid = socket.assigns.phoenix_kit_current_scope.user.uuid
+
+    case Connections.update_connection(
+           socket.assigns.selected_connection,
+           params,
+           actor_uuid: actor_uuid
+         ) do
       {:ok, _connection} ->
         socket =
           socket

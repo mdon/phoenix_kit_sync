@@ -254,7 +254,7 @@ defmodule PhoenixKitSync.Connections do
   Accepts:
   - UUID string: `get_connection("01234567-89ab-cdef-0123-456789abcdef")`
   """
-  @spec get_connection(String.t()) :: Connection.t() | nil
+  @spec get_connection(String.t() | any()) :: Connection.t() | nil
   def get_connection(id) when is_binary(id) do
     repo = RepoHelper.repo()
 
@@ -337,17 +337,22 @@ defmodule PhoenixKitSync.Connections do
         max_downloads: 100
       })
   """
-  @spec update_connection(Connection.t(), map()) ::
+  @spec update_connection(Connection.t(), map(), keyword()) ::
           {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
-  def update_connection(%Connection{} = connection, attrs) do
+  def update_connection(%Connection{} = connection, attrs, opts \\ []) do
     repo = RepoHelper.repo()
+    changed_fields = detect_changed_fields(connection, attrs)
 
     connection
     |> Connection.settings_changeset(attrs)
     |> repo.update()
     |> tap(fn
       {:ok, updated} ->
-        broadcast_connection_update(connection, updated, detect_changed_fields(connection, attrs))
+        broadcast_connection_update(connection, updated, changed_fields)
+
+        log_sync_activity("updated", updated, opts, %{
+          "changed_fields" => Enum.map(changed_fields, &to_string/1)
+        })
 
       {:error, changeset} ->
         Logger.warning(
@@ -355,6 +360,11 @@ defmodule PhoenixKitSync.Connections do
             "| uuid=#{connection.uuid} " <>
             "| errors=#{inspect(changeset.errors)}"
         )
+
+        log_sync_activity("updated", connection, opts, %{
+          "changed_fields" => Enum.map(changed_fields, &to_string/1),
+          "db_pending" => true
+        })
     end)
   end
 
@@ -434,6 +444,7 @@ defmodule PhoenixKitSync.Connections do
         {:ok, deleted}
 
       error ->
+        log_sync_activity("deleted", connection, opts, %{"db_pending" => true})
         error
     end
   end
@@ -472,6 +483,10 @@ defmodule PhoenixKitSync.Connections do
         {:ok, updated}
 
       error ->
+        log_sync_activity("approved", connection, [actor_uuid: admin_user_uuid], %{
+          "db_pending" => true
+        })
+
         error
     end
   end
@@ -511,6 +526,11 @@ defmodule PhoenixKitSync.Connections do
         {:ok, updated}
 
       error ->
+        log_sync_activity("suspended", connection, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason,
+          "db_pending" => true
+        })
+
         error
     end
   end
@@ -550,6 +570,11 @@ defmodule PhoenixKitSync.Connections do
         {:ok, updated}
 
       error ->
+        log_sync_activity("revoked", connection, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason,
+          "db_pending" => true
+        })
+
         error
     end
   end
@@ -578,6 +603,7 @@ defmodule PhoenixKitSync.Connections do
         {:ok, updated}
 
       error ->
+        log_sync_activity("reactivated", connection, opts, %{"db_pending" => true})
         error
     end
   end
