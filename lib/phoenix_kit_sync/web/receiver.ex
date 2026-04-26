@@ -871,7 +871,8 @@ defmodule PhoenixKitSync.Web.Receiver do
   end
 
   @impl true
-  def handle_info(_msg, socket) do
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.Receiver] unhandled message | msg=#{inspect(msg)}")
     {:noreply, socket}
   end
 
@@ -1653,7 +1654,11 @@ defmodule PhoenixKitSync.Web.Receiver do
                 </div>
               </div>
 
-              <button phx-click="transfer_detail_table" class="btn btn-primary btn-lg w-full">
+              <button
+                phx-click="transfer_detail_table"
+                phx-disable-with={gettext("Transferring…")}
+                class="btn btn-primary btn-lg w-full"
+              >
                 <.icon name="hero-arrow-down-tray" class="w-5 h-5" />
                 Transfer {@selected_detail_table}
                 <%= case @detail_filter.mode do %>
@@ -1761,8 +1766,12 @@ defmodule PhoenixKitSync.Web.Receiver do
 
         <%!-- Start Transfer Button --%>
         <div class="flex justify-end">
-          <button phx-click="start_transfer" class="btn btn-primary btn-lg">
-            <.icon name="hero-arrow-down-tray" class="w-5 h-5" /> Start Transfer
+          <button
+            phx-click="start_transfer"
+            phx-disable-with={gettext("Starting…")}
+            class="btn btn-primary btn-lg"
+          >
+            <.icon name="hero-arrow-down-tray" class="w-5 h-5" /> {gettext("Start Transfer")}
           </button>
         </div>
       </div>

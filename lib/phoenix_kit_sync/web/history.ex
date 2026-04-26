@@ -8,6 +8,8 @@ defmodule PhoenixKitSync.Web.History do
   use PhoenixKitWeb, :live_view
   use Gettext, backend: PhoenixKitWeb.Gettext
 
+  require Logger
+
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitSync
@@ -200,6 +202,14 @@ defmodule PhoenixKitSync.Web.History do
     base_path = Routes.path("/admin/sync/history")
     path = base_path <> "?" <> URI.encode_query(query_params)
     {:noreply, push_patch(socket, to: path)}
+  end
+
+  # Catch-all so a stray PubSub message or an internal monitor signal can't
+  # crash the LV. Mirrors the defensive clause on ConnectionsLive.
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.History] unhandled message | msg=#{inspect(msg)}")
+    {:noreply, socket}
   end
 
   @impl true
@@ -618,7 +628,7 @@ defmodule PhoenixKitSync.Web.History do
                 <input
                   type="text"
                   name="reason"
-                  placeholder="Reason (optional)"
+                  placeholder={gettext("Reason (optional)")}
                   class="input input-bordered input-sm w-48"
                 />
               </div>
@@ -634,13 +644,14 @@ defmodule PhoenixKitSync.Web.History do
               type="button"
               phx-click="approve_transfer"
               phx-value-uuid={@transfer.uuid}
+              phx-disable-with={gettext("Approving…")}
               class="btn btn-success btn-sm"
             >
-              Approve
+              {gettext("Approve")}
             </button>
           <% else %>
             <button type="button" phx-click="close_approval_modal" class="btn btn-ghost">
-              Close
+              {gettext("Close")}
             </button>
           <% end %>
         </div>

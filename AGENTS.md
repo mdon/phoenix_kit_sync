@@ -343,3 +343,15 @@ PhoenixKit has two external module archetypes:
 - **Feature modules** (like this one, `phoenix_kit_sync`) — own Ecto schemas, implement a full feature with CRUD, activity logging, admin LiveViews, and REST/WebSocket APIs. The `PhoenixKitSync.Errors` atom dispatcher + activity-logging helper in `Connections` are load-bearing for feature-module quality; template modules omit them.
 
 When starting a new feature module, copy the file layout from this module or `phoenix_kit_catalogue`/`phoenix_kit_ai`. When starting a new template/showcase module, copy from `phoenix_kit_hello_world`.
+
+## What This Module Does NOT Have
+
+These are deliberate non-features. If a future review or agent suggests adding any of them, surface the suggestion to the maintainer rather than implementing — they were considered and explicitly omitted.
+
+- **No auto-sync scheduler.** `auto_sync_enabled` and `auto_sync_interval_minutes` exist on the schema but the worker that would consume them is intentionally not implemented yet. Connections sync only when an admin clicks through the receiver flow or when a remote peer pulls.
+- **No per-record encryption at rest.** Auth tokens are hashed (`auth_token_hash`); record payloads are stored and transferred in plaintext over TLS. Application-layer field encryption is out of scope for this module.
+- **No webhook retry layer.** `ConnectionNotifier` fires a single best-effort outbound HTTP request after a sync; it does not queue, retry on failure, or back off. Use core's Oban for any future retry needs rather than wiring queue logic into this module.
+- **No automatic data versioning / snapshot system.** `Transfer` rows record what moved when, but the module does not retain pre-sync snapshots of target tables.
+- **No diff/merge UI.** Conflict resolution is per-table (`conflict_strategy: skip | overwrite | append`); there is no row-level merge or three-way diff view.
+- **No domain allowlist on `connection.site_url` by default.** Outbound HTTP/WebSocket calls trust the admin-supplied URL. Adding SSRF guards is a feature-track decision; if undertaken, follow the AI module precedent (`validate_base_url/1` + opt-in bypass via app config for self-hosted instances).
+- **No bulk operations across multiple connections.** Approve / suspend / revoke act on one connection at a time. Multi-select admin UI is out of scope.

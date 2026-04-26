@@ -255,7 +255,8 @@ defmodule PhoenixKitSync.Web.Sender do
   end
 
   @impl true
-  def handle_info(_msg, socket) do
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.Sender] unhandled message | msg=#{inspect(msg)}")
     {:noreply, socket}
   end
 
@@ -310,8 +311,12 @@ defmodule PhoenixKitSync.Web.Sender do
           Click the button below to generate a connection code. Share this code and your site URL
           with the site that wants to receive your data.
         </p>
-        <button phx-click="generate_code" class="btn btn-primary btn-lg">
-          <.icon name="hero-key" class="w-5 h-5" /> Generate Connection Code
+        <button
+          phx-click="generate_code"
+          phx-disable-with={gettext("Generating…")}
+          class="btn btn-primary btn-lg"
+        >
+          <.icon name="hero-key" class="w-5 h-5" /> {gettext("Generate Connection Code")}
         </button>
       </div>
     </div>
@@ -382,8 +387,12 @@ defmodule PhoenixKitSync.Web.Sender do
 
         <%!-- Actions --%>
         <div class="flex gap-4 justify-center">
-          <button phx-click="regenerate_code" class="btn btn-outline btn-sm">
-            <.icon name="hero-arrow-path" class="w-4 h-4" /> New Code
+          <button
+            phx-click="regenerate_code"
+            phx-disable-with={gettext("Regenerating…")}
+            class="btn btn-outline btn-sm"
+          >
+            <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("New Code")}
           </button>
           <button phx-click="cancel" class="btn btn-ghost btn-sm">
             Cancel

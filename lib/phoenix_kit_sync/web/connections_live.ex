@@ -1042,8 +1042,11 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
   # Catch-all so a stray PubSub message or an internal monitor signal can't
   # crash the LV (which would lose any unsaved form input the admin has
-  # typed). Receiver and Sender LVs both have the same defensive clause.
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # typed). Receiver, Sender, History, and Index LVs share this clause.
+  def handle_info(msg, socket) do
+    Logger.debug("[ConnectionsLive] unhandled message | msg=#{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   @doc false
   # Public-but-not-API: exposed so tests can pin the gettext-translated
@@ -1595,6 +1598,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             type="button"
             phx-click="approve_connection"
             phx-value-uuid={@connection.uuid}
+            phx-disable-with={gettext("Approving…")}
             class="btn btn-success btn-xs tooltip tooltip-bottom"
             data-tip={gettext("Approve")}
           >
@@ -1620,6 +1624,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             type="button"
             phx-click="reactivate_connection"
             phx-value-uuid={@connection.uuid}
+            phx-disable-with={gettext("Reactivating…")}
             class="btn btn-info btn-xs tooltip tooltip-bottom"
             data-tip={gettext("Reactivate")}
           >
@@ -1816,9 +1821,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               <label class="text-sm text-base-content/70">Auto Sync</label>
               <p>
                 <%= if @connection.auto_sync_enabled do %>
-                  <span class="badge badge-success">Enabled</span>
+                  <span class="badge badge-success">{gettext("Enabled")}</span>
                 <% else %>
-                  <span class="badge badge-ghost">Disabled</span>
+                  <span class="badge badge-ghost">{gettext("Disabled")}</span>
                 <% end %>
               </p>
             </div>
@@ -2121,15 +2126,15 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                   <%!-- Legend --%>
                   <div class="bg-base-200 rounded-lg p-3 mb-4 text-sm">
                     <div class="flex flex-wrap gap-x-6 gap-y-1 items-center">
-                      <span class="text-base-content/70">Record counts:</span>
+                      <span class="text-base-content/70">{gettext("Record counts:")}</span>
                       <span>
-                        <span class="font-semibold text-primary">Sender</span> = remote data
+                        <span class="font-semibold text-primary">{gettext("Sender")}</span> = {gettext("remote data")}
                       </span>
                       <span>
-                        <span class="font-semibold text-success">Local</span> = your database
+                        <span class="font-semibold text-success">{gettext("Local")}</span> = {gettext("your database")}
                       </span>
                       <span class="badge badge-warning badge-sm gap-1">
-                        <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> = differs
+                        <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> = {gettext("differs")}
                       </span>
                     </div>
                   </div>
@@ -2238,7 +2243,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                               <%= if is_suggested do %>
                                 <span
                                   class="ml-1 text-warning text-xs tooltip tooltip-right"
-                                  data-tip="Used by selected tables — consider including"
+                                  data-tip={gettext("Used by selected tables — consider including")}
                                 >
                                   ⚠
                                 </span>
@@ -2456,7 +2461,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                   <%= if @loading_schema do %>
                     <div class="flex items-center gap-2 text-base-content/70">
                       <span class="loading loading-spinner loading-sm"></span>
-                      <span>Loading table schema...</span>
+                      <span>{gettext("Loading table schema…")}</span>
                     </div>
                   <% else %>
                     <div class="bg-base-200 rounded-lg p-4">
@@ -2543,9 +2548,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                           disabled={@creating_table or is_nil(@detail_table_schema)}
                         >
                           <%= if @creating_table do %>
-                            <span class="loading loading-spinner loading-xs"></span> Creating...
+                            <span class="loading loading-spinner loading-xs"></span> {gettext("Creating…")}
                           <% else %>
-                            <.icon name="hero-plus" class="w-4 h-4" /> Create Table
+                            <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Create Table")}
                           <% end %>
                         </button>
                       </div>
@@ -2603,7 +2608,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                             name="range_start"
                             value={@detail_filter.range_start}
                             class="input input-bordered w-32"
-                            placeholder="From"
+                            placeholder={gettext("From")}
                           />
                           <span>to</span>
                           <input
@@ -2611,7 +2616,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                             name="range_end"
                             value={@detail_filter.range_end}
                             class="input input-bordered w-32"
-                            placeholder="To"
+                            placeholder={gettext("To")}
                           />
                         </div>
                       <% end %>

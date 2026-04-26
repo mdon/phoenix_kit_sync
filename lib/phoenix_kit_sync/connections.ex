@@ -145,8 +145,7 @@ defmodule PhoenixKitSync.Connections do
         created_by_uuid: current_user.uuid
       })
 
-      # Token is only returned once - store it securely!
-      IO.puts("Auth token: \#{token}")
+      # Token is only returned once — store it securely.
   """
   @spec create_connection(map()) ::
           {:ok, Connection.t(), String.t()} | {:error, Ecto.Changeset.t()}
@@ -903,7 +902,7 @@ defmodule PhoenixKitSync.Connections do
   ## Examples
 
       {count, nil} = Connections.expire_connections()
-      IO.puts("Expired \#{count} connections")
+      # `count` is the number of connections marked as expired.
   """
   @spec expire_connections() :: {non_neg_integer(), nil | term()}
   def expire_connections do

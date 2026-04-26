@@ -130,6 +130,152 @@ Final state after Batch 1 + Batch 2:
 - `mix test` — 391 tests, 0 failures, 5/5 stable consecutive runs
   (baseline was 316)
 
+## Batch 2 — re-validation 2026-04-26
+
+Second-pass triage against the post-Apr playbook. The original sweep
+predates several C12 prompt categories (catch-all `handle_info`
+Logger.debug, `phx-disable-with` on every async/destructive
+`phx-click`, the `pgcrypto` extension trap, the `enabled?/0`
+`catch :exit` flake guard, hardcoded heex strings missed by the first
+gettext pass, `IO.puts` in `@doc` examples, the canonical "What This
+Module Does NOT Have" section). All in-scope items closed in this
+batch.
+
+Phase 1 PR triage re-verified clean: every fix in PRs #1, #2, #3, #4
+(SQL parameterisation, `Plug.Crypto.secure_compare`, supervised tasks
+via `notify_remote_async`, `css_sources/0`, AGENTS.md routing pointer)
+is still in place on 2026-04-26.
+
+### Fixed in Batch 2
+
+- ~~`enabled?/0` had only `rescue _ -> false`~~ — added
+  `catch :exit, _ -> false` clause for the sandbox-shutdown trap from
+  workspace AGENTS.md (`lib/phoenix_kit_sync.ex:104`).
+- ~~`handle_info/2` catch-all clauses were silent on `connections_live`,
+  `sender`, `receiver` (just `{:noreply, socket}`) and missing entirely
+  on `history` and `index`~~ — every admin LV now ships
+  `Logger.debug("[<LV>] unhandled message | msg=…")` so a stray PubSub
+  broadcast is observable rather than swallowed
+  (`connections_live.ex:1046-1051`, `sender.ex:258-261`,
+  `receiver.ex:874-877`, `history.ex:206-211`, `index.ex:45-50`).
+- ~~7 destructive `phx-click` buttons missing `phx-disable-with`~~ —
+  added on `approve_connection` (Approving…), `reactivate_connection`
+  (Reactivating…), `approve_transfer` (Approving…),
+  `transfer_detail_table` (Transferring…), `start_transfer`
+  (Starting…), `generate_code` (Generating…), `regenerate_code`
+  (Regenerating…). Prevents double-clicks from issuing duplicate
+  approvals / generates / transfers.
+- ~~12 hardcoded English heex strings missed by the original gettext
+  pass~~ — wrapped: badges (`Enabled`, `Disabled`), legend labels
+  (`Sender`, `Local`, `Record counts:`, `= differs`), tooltip
+  `data-tip` ("Used by selected tables — consider including"), loading
+  states (`Loading table schema…`, `Creating…`), placeholders (`From`,
+  `To`, `Reason (optional)`). Default English output preserved; non-en
+  locales now translate.
+- ~~3 `IO.puts` calls inside `@doc` example blocks~~ — replaced with
+  comments (`connections.ex:148-149` for `create_connection/1`,
+  `connections.ex:905-906` for `expire_connections/0`,
+  `transfers.ex:544-545` for `expire_pending_approvals/0`). `@doc`
+  examples should not show debug output.
+- ~~`pgcrypto` extension absent from `test/test_helper.exs`~~ — added
+  `CREATE EXTENSION IF NOT EXISTS "pgcrypto"` next to `uuid-ossp`. The
+  `uuid_generate_v7()` function depends on `gen_random_bytes` from
+  pgcrypto; on a fresh `createdb` without it, every UUID-defaulted
+  insert in tests would have failed.
+- ~~`AGENTS.md` missing the canonical "What This Module Does NOT Have"
+  section~~ — added with seven deliberate non-features (auto-sync
+  scheduler, per-record encryption, webhook retry layer, snapshot
+  system, diff/merge UI, default URL allowlist, bulk operations).
+  Pins what to push back on when future agents suggest re-adding them.
+
+### Pinning tests added (Batch 2)
+
+`test/phoenix_kit_sync/batch_2_revalidation_test.exs` (+17 tests, 553
+total). Every Batch 2 production change has at least one assertion
+that would fail on revert:
+
+| Change | Pinning test |
+|--------|--------------|
+| `handle_info` catch-all on 5 LVs | "<LV> does not crash on stray message" × 5 + structural pin on `Logger.debug` body |
+| `phx-disable-with` on 7 phx-click buttons | rendered-HTML regex match for approve/reactivate/approve_transfer (in-page) + source-grep pins for transfer_detail_table/start_transfer/generate_code/regenerate_code (deep flows) |
+| 12 gettext wraps | `refute` source matches for each old raw string + rendered-HTML assertion for the deny-form placeholder |
+| 3 `IO.puts` removals | source `refute` matches |
+| `pgcrypto` extension | `Repo.query!("SELECT length(gen_random_bytes(10))")` returns 10 |
+| `enabled?/0` shape | structural `assert source =~ ~r/rescue.+catch.+:exit, _ -> false/` |
+
+### Files touched (Batch 2)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_sync.ex` | `enabled?/0` `catch :exit, _ -> false` |
+| `lib/phoenix_kit_sync/connections.ex` | 2 × `IO.puts` → comment in `@doc` examples |
+| `lib/phoenix_kit_sync/transfers.ex` | 1 × `IO.puts` → comment in `@doc` example |
+| `lib/phoenix_kit_sync/web/connections_live.ex` | `handle_info` Logger.debug; `phx-disable-with` on approve / reactivate; 11 gettext wraps |
+| `lib/phoenix_kit_sync/web/sender.ex` | `handle_info` Logger.debug; `phx-disable-with` on generate_code + regenerate_code |
+| `lib/phoenix_kit_sync/web/receiver.ex` | `handle_info` Logger.debug; `phx-disable-with` on transfer_detail_table + start_transfer |
+| `lib/phoenix_kit_sync/web/history.ex` | `require Logger`; `handle_info` Logger.debug catch-all; `phx-disable-with` on approve_transfer; 1 gettext wrap |
+| `lib/phoenix_kit_sync/web/index.ex` | `require Logger`; `handle_info` Logger.debug catch-all |
+| `test/test_helper.exs` | `CREATE EXTENSION IF NOT EXISTS "pgcrypto"` |
+| `AGENTS.md` | "What This Module Does NOT Have" section |
+| `test/phoenix_kit_sync/batch_2_revalidation_test.exs` | New — +17 pinning tests |
+
+### Verification (Batch 2)
+
+- `mix compile --warnings-as-errors` — clean
+- `mix format --check-formatted` — clean
+- `mix credo --strict` — 0 issues
+- `mix dialyzer` — 0 errors (9 skipped via `.dialyzer_ignore.exs`,
+  all pre-existing)
+- `mix test` — 553 tests, 0 failures, **10/10 stable consecutive runs**
+  (baseline was 536)
+- Browser smoke — Sync overview / Connections / History admin pages
+  render with identical structure to the pre-batch baselines
+  (`.tmp_baselines/sync_baseline_*.png`); no missing sidebar / header
+  / table or layout regressions.
+
+### Surfaced for Max's decision (potential Batch 3 — fix-everything)
+
+These are HIGH/MEDIUM findings the structural agents and C12.5 deep
+dive flagged that change production behaviour. Surfaced rather than
+fixed unilaterally per the workspace
+[feedback_pr_followups.md](~/.claude/projects/-Users-maxdon-Desktop-Elixir/memory/feedback_pr_followups.md)
+("Don't silently defer PR review findings").
+
+- **(A) SSRF guard on `connection.site_url`** — HIGH. The URL field is
+  cast from form params (`Connection.changeset/2`, default-mode
+  `cast/2` with no format guard) and flows straight into outbound
+  HTTP/WebSocket via `ConnectionNotifier.build_api_url/1`
+  (`connection_notifier.ex:99`), `ConnectionNotifier.make_http_request/3`
+  (`connection_notifier.ex:1045`), and
+  `WebSocketClient.build_websocket_url/2` (`websocket_client.ex:63`)
+  with no rejection of RFC1918 / loopback / link-local /
+  fc00::/7 / fe80::/10 / `.local` / non-http(s) schemes. An admin
+  could create a sender connection pointing at internal services
+  (cloud metadata, redis on 127.0.0.1, etc.) and exfiltrate via the
+  notifier flow. Per AI module precedent: `validate_base_url/1` in the
+  changeset + opt-in bypass via
+  `config :phoenix_kit_sync, :allow_internal_urls` for self-hosted
+  Ollama-style use cases. ~12 pinning tests.
+- **(B) Activity logging gaps** — MEDIUM. `update_connection/2`
+  (`connections.ex:343-360`) currently has zero activity logging on
+  any branch — modifications to allowed_tables / max_downloads /
+  download_password are never audited. Five other mutations
+  (`delete_connection`, `approve_connection`, `suspend_connection`,
+  `revoke_connection`, `reactivate_connection`) log on `:ok` but not
+  on `:error`; per the C12 agent #2 prompt, both branches should log
+  (the `:error` branch with `db_pending: true` so the audit trail
+  covers the user-initiated action even when the cache write fails).
+- **(C) `@spec` backfill** — LOW (volume large). 45+ public functions
+  across `Connection` (~25), `Transfer` (~16), `Connections` context
+  (~13), `Transfers` context (~7) are missing `@spec`. Most are
+  multi-clause helpers and changeset variants. Adding all would mirror
+  the AI module Batch 3 precedent (+31 specs).
+- **(D) Component refactor** — LOW. ~4 raw `<input>` / `<select>` /
+  `<textarea>` elements in `connections_live.ex` not yet swapped to
+  core `<.input>` / `<.select>` / `<.textarea>`. Smaller surface than
+  the AI module's `prompt_form` rewrite.
+
 ## Open
 
-None.
+None — see "Surfaced for Max's decision" for items deferred pending
+fix-everything authorisation.

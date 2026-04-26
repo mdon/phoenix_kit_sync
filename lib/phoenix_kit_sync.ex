@@ -105,6 +105,12 @@ defmodule PhoenixKitSync do
     Settings.get_boolean_setting(@enabled_key, false)
   rescue
     _ -> false
+  catch
+    # Sandbox owner exit during a non-DataCase test run surfaces as
+    # `:exit` rather than a rescuable exception — without this clause
+    # the next test that touches `enabled?/0` flakes ~1-in-10. See
+    # workspace AGENTS.md flaky-test traps.
+    :exit, _ -> false
   end
 
   @impl PhoenixKit.Module

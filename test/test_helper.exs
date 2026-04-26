@@ -41,6 +41,13 @@ repo_available =
       # Enable uuid-ossp extension
       TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
 
+      # Enable pgcrypto — uuid_generate_v7() depends on `gen_random_bytes`,
+      # which lives in pgcrypto. On a fresh `createdb` without it, the
+      # CREATE FUNCTION below succeeds but every insert that defaults to
+      # uuid_generate_v7() fails with "function gen_random_bytes does not
+      # exist". See workspace AGENTS.md flaky-test traps.
+      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+
       # Create uuid_generate_v7() function (normally created by PhoenixKit V40 migration)
       TestRepo.query!("""
       CREATE OR REPLACE FUNCTION uuid_generate_v7()

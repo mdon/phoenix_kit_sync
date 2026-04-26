@@ -542,7 +542,7 @@ defmodule PhoenixKitSync.Transfers do
   ## Examples
 
       {count, nil} = Transfers.expire_pending_approvals()
-      IO.puts("Expired \#{count} approval requests")
+      # `count` is the number of approval requests marked as expired.
   """
   @spec expire_pending_approvals() :: {non_neg_integer(), nil | term()}
   def expire_pending_approvals do
