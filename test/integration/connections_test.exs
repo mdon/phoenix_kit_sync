@@ -1,6 +1,8 @@
 defmodule PhoenixKitSync.Integration.ConnectionsTest do
   use PhoenixKitSync.DataCase, async: false
 
+  import PhoenixKitSync.ActivityLogAssertions
+
   alias PhoenixKitSync.Connections
 
   @valid_attrs %{
@@ -353,6 +355,36 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
 
       assert {:ok, _conn, _token} = result
     end
+
+    # Pinning test: when self-connection IS detected, the returned changeset
+    # must have :action set so LiveView's <.input> renders the inline error.
+    # Pre-fix the changeset had action=nil and the form looked valid to the
+    # user. The translated error string also has to flow through gettext.
+    test "rejected self-connection returns a changeset with :action set" do
+      our_url = "https://self-pin-#{System.unique_integer([:positive])}.example.com"
+      previous = Application.get_env(:phoenix_kit, :public_url)
+      Application.put_env(:phoenix_kit, :public_url, our_url)
+
+      try do
+        assert {:error, changeset} =
+                 Connections.create_connection(%{
+                   "name" => "Self",
+                   "direction" => "sender",
+                   "site_url" => our_url
+                 })
+
+        assert changeset.action == :insert,
+               "self-rejection changeset must have :action set so inline errors render"
+
+        assert {msg, _opts} = Keyword.get(changeset.errors, :site_url)
+        assert msg == "cannot create a connection to yourself"
+      after
+        case previous do
+          nil -> Application.delete_env(:phoenix_kit, :public_url)
+          val -> Application.put_env(:phoenix_kit, :public_url, val)
+        end
+      end
+    end
   end
 
   # ===========================================
@@ -476,6 +508,236 @@ defmodule PhoenixKitSync.Integration.ConnectionsTest do
       {:ok, _} = Connections.update_connection(conn, %{name: "Updated Name"})
       assert_receive {:connection_updated, uuid}
       assert uuid == conn.uuid
+    end
+
+    # Regression: string-keyed attrs (e.g. from a LiveView form) used to make
+    # every field look "changed" because Map.get(%Connection{}, "status")
+    # always returned nil, never matching the string-keyed value. That
+    # incorrectly fired :connection_updated on no-op saves and routed real
+    # status changes to :connection_updated instead of :connection_status_changed.
+    test "update_connection with string-keyed status attr fires :connection_status_changed" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://pubsub-string-status-#{System.unique_integer([:positive])}.com"
+        })
+
+      assert_receive {:connection_created, _}
+
+      {:ok, _} = Connections.update_connection(conn, %{"status" => "active"})
+      assert_receive {:connection_status_changed, uuid, "active"}
+      assert uuid == conn.uuid
+
+      refute_receive {:connection_updated, _}, 50
+    end
+
+    test "update_connection with no actual change emits no stale broadcast" do
+      conn =
+        create_connection(%{
+          "name" => "No-op Name",
+          "site_url" => "https://pubsub-noop-#{System.unique_integer([:positive])}.com"
+        })
+
+      assert_receive {:connection_created, _}
+
+      # Submit the same name via a string-keyed attr map. Before the
+      # atom-key normalization fix this would broadcast :connection_updated
+      # because the comparison mis-read the struct.
+      {:ok, _} = Connections.update_connection(conn, %{"name" => "No-op Name"})
+
+      refute_receive {:connection_updated, _}, 50
+      refute_receive {:connection_status_changed, _, _}, 50
+    end
+  end
+
+  describe "activity logging" do
+    # Pinning tests for the C4 audit trail. Each mutation should persist a
+    # `sync.connection.<verb>` row into phoenix_kit_activities with the
+    # connection's uuid as resource_uuid and a safe metadata subset
+    # (name/direction/status — never site_url or auth fields).
+
+    test "create_connection logs sync.connection.created" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-create-#{System.unique_integer([:positive])}.com"
+        })
+
+      assert_activity_logged("sync.connection.created",
+        resource_uuid: conn.uuid,
+        metadata_has: %{
+          "connection_name" => conn.name,
+          "direction" => "sender",
+          "status" => "pending"
+        }
+      )
+    end
+
+    test "approve_connection logs sync.connection.approved with actor_uuid" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-approve-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.approve_connection(conn, admin_uuid)
+
+      assert_activity_logged("sync.connection.approved",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+
+    test "suspend_connection logs sync.connection.suspended with reason" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-suspend-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.suspend_connection(conn, admin_uuid, "Security audit")
+
+      assert_activity_logged("sync.connection.suspended",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid,
+        metadata_has: %{"reason" => "Security audit"}
+      )
+    end
+
+    test "revoke_connection logs sync.connection.revoked with reason" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-revoke-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.revoke_connection(conn, admin_uuid, "Compromised")
+
+      assert_activity_logged("sync.connection.revoked",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid,
+        metadata_has: %{"reason" => "Compromised"}
+      )
+    end
+
+    test "reactivate_connection logs sync.connection.reactivated with actor opt" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-reactivate-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, suspended} = Connections.suspend_connection(conn, admin_uuid)
+      {:ok, _} = Connections.reactivate_connection(suspended, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.reactivated",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+
+    test "delete_connection logs sync.connection.deleted with actor via opts" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-delete-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _} = Connections.delete_connection(conn, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.deleted",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+
+    test "regenerate_token logs sync.connection.token_regenerated" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-regen-#{System.unique_integer([:positive])}.com"
+        })
+
+      admin_uuid = UUIDv7.generate()
+      {:ok, _, _new_token} = Connections.regenerate_token(conn, actor_uuid: admin_uuid)
+
+      assert_activity_logged("sync.connection.token_regenerated",
+        resource_uuid: conn.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+
+    test "regenerate_token activity metadata never leaks the new token" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-regen-leak-#{System.unique_integer([:positive])}.com"
+        })
+
+      {:ok, _, new_token} = Connections.regenerate_token(conn)
+
+      entry =
+        assert_activity_logged("sync.connection.token_regenerated", resource_uuid: conn.uuid)
+
+      metadata = entry.metadata || %{}
+      refute Map.has_key?(metadata, "auth_token")
+      refute Map.has_key?(metadata, "auth_token_hash")
+      refute Enum.any?(Map.values(metadata), fn v -> v == new_token end)
+    end
+
+    test "metadata never leaks site_url or auth_token_hash" do
+      conn =
+        create_connection(%{
+          "site_url" => "https://act-leak-check-#{System.unique_integer([:positive])}.com"
+        })
+
+      created = assert_activity_logged("sync.connection.created", resource_uuid: conn.uuid)
+      metadata = created.metadata || %{}
+      refute Map.has_key?(metadata, "site_url")
+      refute Map.has_key?(metadata, "auth_token_hash")
+      refute Map.has_key?(metadata, "auth_token")
+    end
+  end
+
+  describe "stats-tracker mutations (high-frequency, intentionally not activity-logged)" do
+    # These three mutations don't write to phoenix_kit_activities (the
+    # `Transfers.create_transfer/2` row already covers each batch). The
+    # tests pin the function shape so reverts don't go unnoticed.
+
+    test "record_transfer/2 increments stats counters" do
+      conn = create_connection()
+
+      {:ok, updated} =
+        Connections.record_transfer(conn, %{records_count: 50, bytes_count: 2_000})
+
+      assert updated.downloads_used == (conn.downloads_used || 0) + 1
+      assert updated.records_downloaded == (conn.records_downloaded || 0) + 50
+      assert updated.total_records_transferred == (conn.total_records_transferred || 0) + 50
+      assert updated.total_bytes_transferred == (conn.total_bytes_transferred || 0) + 2_000
+      assert updated.last_connected_at != nil
+      assert updated.last_transfer_at != nil
+    end
+
+    test "touch_connected/1 updates only last_connected_at" do
+      conn = create_connection()
+      original_records = conn.records_downloaded || 0
+
+      {:ok, updated} = Connections.touch_connected(conn)
+
+      assert updated.last_connected_at != nil
+      # Stats counters are NOT incremented by touch_connected.
+      assert updated.records_downloaded == original_records
+    end
+
+    test "regenerate_token/1 returns {:ok, conn, raw_token} with a fresh token" do
+      conn = create_connection()
+      original_hash = conn.auth_token_hash
+
+      {:ok, updated, new_token} = Connections.regenerate_token(conn)
+
+      assert is_binary(new_token)
+      assert byte_size(new_token) > 16
+      assert updated.auth_token_hash != original_hash
+      # The hash matches the SHA-256 of the new token (verifies the
+      # token returned IS the one stored, not a different value).
+      expected_hash = :crypto.hash(:sha256, new_token) |> Base.encode16(case: :lower)
+      assert updated.auth_token_hash == expected_hash
     end
   end
 end

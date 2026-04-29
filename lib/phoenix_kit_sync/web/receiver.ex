@@ -20,6 +20,7 @@ defmodule PhoenixKitSync.Web.Receiver do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitSync.SchemaInspector
+  alias PhoenixKitSync.Web.Receiver.Helpers
   alias PhoenixKitSync.WebSocketClient
   alias PhoenixKitSync.Workers.ImportWorker
 
@@ -183,7 +184,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       WebSocketClient.request_tables(socket.assigns.ws_client)
       {:noreply, assign(socket, :loading_tables, true)}
     else
-      {:noreply, put_flash(socket, :error, "Not connected to sender")}
+      {:noreply, put_flash(socket, :error, gettext("Not connected to sender"))}
     end
   end
 
@@ -239,7 +240,7 @@ defmodule PhoenixKitSync.Web.Receiver do
   @impl true
   def handle_event("start_transfer", _params, socket) do
     if MapSet.size(socket.assigns.selected_tables) == 0 do
-      {:noreply, put_flash(socket, :error, "Please select at least one table")}
+      {:noreply, put_flash(socket, :error, gettext("Please select at least one table"))}
     else
       tables_list = MapSet.to_list(socket.assigns.selected_tables)
 
@@ -395,7 +396,7 @@ defmodule PhoenixKitSync.Web.Receiver do
             |> assign(:creating_table, false)
             |> assign(:local_table_exists, true)
             |> assign(:local_counts, local_counts)
-            |> put_flash(:info, "Table '#{table}' created successfully")
+            |> put_flash(:info, gettext("Table '%{table}' created successfully", table: table))
 
           {:noreply, socket}
 
@@ -405,12 +406,15 @@ defmodule PhoenixKitSync.Web.Receiver do
           socket =
             socket
             |> assign(:creating_table, false)
-            |> put_flash(:error, "Failed to create table: #{inspect(reason)}")
+            |> put_flash(
+              :error,
+              gettext("Failed to create table: %{reason}", reason: inspect(reason))
+            )
 
           {:noreply, socket}
       end
     else
-      {:noreply, put_flash(socket, :error, "No table selected or schema not loaded")}
+      {:noreply, put_flash(socket, :error, gettext("No table selected or schema not loaded"))}
     end
   end
 
@@ -450,7 +454,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       send(self(), :execute_transfer)
       {:noreply, socket}
     else
-      {:noreply, put_flash(socket, :error, "Please select a table first")}
+      {:noreply, put_flash(socket, :error, gettext("Please select a table first"))}
     end
   end
 
@@ -526,7 +530,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       |> assign(:connected, false)
       |> assign(:ws_client, nil)
       |> assign(:connection_status, nil)
-      |> put_flash(:info, "Disconnected from sender")
+      |> put_flash(:info, gettext("Disconnected from sender"))
 
     {:noreply, socket}
   end
@@ -546,7 +550,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       if socket.assigns.step == :enter_credentials do
         assign(socket, :error_message, format_connection_error(reason))
       else
-        put_flash(socket, :info, "Connection closed")
+        put_flash(socket, :info, gettext("Connection closed"))
       end
 
     {:noreply, socket}
@@ -584,7 +588,7 @@ defmodule PhoenixKitSync.Web.Receiver do
       |> assign(:connected, false)
       |> assign(:ws_client, nil)
       |> assign(:step, :enter_credentials)
-      |> put_flash(:info, "Sender closed the connection")
+      |> put_flash(:info, gettext("Sender closed the connection"))
 
     {:noreply, socket}
   end
@@ -655,7 +659,10 @@ defmodule PhoenixKitSync.Web.Receiver do
       socket =
         socket
         |> assign(:pending_schemas, pending_schemas)
-        |> put_flash(:warning, "Could not get schema for #{table}, table won't be auto-created")
+        |> put_flash(
+          :warning,
+          gettext("Could not get schema for %{table}, table won't be auto-created", table: table)
+        )
 
       # Check if all schemas have been received/failed
       if Enum.empty?(pending_schemas) do
@@ -679,7 +686,13 @@ defmodule PhoenixKitSync.Web.Receiver do
         socket
         |> assign(:loading_schema, false)
         |> assign(:detail_table_schema, nil)
-        |> put_flash(:error, "Failed to load schema for #{table}: #{error}")
+        |> put_flash(
+          :error,
+          gettext("Failed to load schema for %{table}: %{error}",
+            table: table,
+            error: to_string(error)
+          )
+        )
 
       {:noreply, socket}
     end
@@ -804,7 +817,13 @@ defmodule PhoenixKitSync.Web.Receiver do
           tables_done: progress.tables_done + 1,
           pending_fetch: nil
       })
-      |> put_flash(:warning, "Failed to fetch records from #{table}: #{error}")
+      |> put_flash(
+        :warning,
+        gettext("Failed to fetch records from %{table}: %{error}",
+          table: table,
+          error: to_string(error)
+        )
+      )
 
     # Continue with next table
     socket =
@@ -825,7 +844,7 @@ defmodule PhoenixKitSync.Web.Receiver do
     socket =
       socket
       |> assign(:loading_tables, false)
-      |> put_flash(:error, "Failed to load tables: #{error}")
+      |> put_flash(:error, gettext("Failed to load tables: %{error}", error: to_string(error)))
 
     {:noreply, socket}
   end
@@ -852,7 +871,8 @@ defmodule PhoenixKitSync.Web.Receiver do
   end
 
   @impl true
-  def handle_info(_msg, socket) do
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.Receiver] unhandled message | msg=#{inspect(msg)}")
     {:noreply, socket}
   end
 
@@ -992,8 +1012,12 @@ defmodule PhoenixKitSync.Web.Receiver do
 
           <%!-- Submit Button --%>
           <div class="form-control mt-6">
-            <button type="submit" class="btn btn-primary btn-lg">
-              <.icon name="hero-link" class="w-5 h-5" /> Connect
+            <button
+              type="submit"
+              class="btn btn-primary btn-lg"
+              phx-disable-with={gettext("Connecting…")}
+            >
+              <.icon name="hero-link" class="w-5 h-5" /> {gettext("Connect")}
             </button>
           </div>
         </form>
@@ -1044,7 +1068,11 @@ defmodule PhoenixKitSync.Web.Receiver do
                 <p class="text-sm text-base-content/70 font-mono">{@sender_url}</p>
               </div>
             </div>
-            <button phx-click="disconnect" class="btn btn-outline btn-error btn-sm">
+            <button
+              phx-click="disconnect"
+              phx-disable-with={gettext("Disconnecting…")}
+              class="btn btn-outline btn-error btn-sm"
+            >
               <.icon name="hero-x-mark" class="w-4 h-4" /> Disconnect
             </button>
           </div>
@@ -1626,7 +1654,11 @@ defmodule PhoenixKitSync.Web.Receiver do
                 </div>
               </div>
 
-              <button phx-click="transfer_detail_table" class="btn btn-primary btn-lg w-full">
+              <button
+                phx-click="transfer_detail_table"
+                phx-disable-with={gettext("Transferring…")}
+                class="btn btn-primary btn-lg w-full"
+              >
                 <.icon name="hero-arrow-down-tray" class="w-5 h-5" />
                 Transfer {@selected_detail_table}
                 <%= case @detail_filter.mode do %>
@@ -1734,8 +1766,12 @@ defmodule PhoenixKitSync.Web.Receiver do
 
         <%!-- Start Transfer Button --%>
         <div class="flex justify-end">
-          <button phx-click="start_transfer" class="btn btn-primary btn-lg">
-            <.icon name="hero-arrow-down-tray" class="w-5 h-5" /> Start Transfer
+          <button
+            phx-click="start_transfer"
+            phx-disable-with={gettext("Starting…")}
+            class="btn btn-primary btn-lg"
+          >
+            <.icon name="hero-arrow-down-tray" class="w-5 h-5" /> {gettext("Start Transfer")}
           </button>
         </div>
       </div>
@@ -1905,42 +1941,6 @@ defmodule PhoenixKitSync.Web.Receiver do
     end
   end
 
-  defp format_number(num) when is_integer(num) do
-    num
-    |> Integer.to_string()
-    |> String.reverse()
-    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-    |> String.reverse()
-  end
-
-  defp format_number(_), do: "?"
-
-  defp format_strategy(:skip), do: "Skip existing"
-  defp format_strategy(:overwrite), do: "Overwrite existing"
-  defp format_strategy(:merge), do: "Merge data"
-  defp format_strategy(:append), do: "Append (new IDs)"
-
-  defp format_connection_error(:join_timeout),
-    do: "Connection timed out. Please check the URL and code."
-
-  defp format_connection_error(%{"message" => msg}), do: msg
-
-  defp format_connection_error({:error, :econnrefused}),
-    do: "Could not connect to sender. Please check the URL."
-
-  defp format_connection_error({:error, :nxdomain}),
-    do: "Could not find the sender's server. Please check the URL."
-
-  defp format_connection_error({:error, :timeout}),
-    do: "Connection timed out. Please try again."
-
-  defp format_connection_error(%WebSockex.ConnError{original: original}),
-    do: format_connection_error(original)
-
-  defp format_connection_error(reason) when is_binary(reason), do: reason
-
-  defp format_connection_error(reason), do: "Connection failed: #{inspect(reason)}"
-
   defp get_current_user(socket) do
     case socket.assigns[:phoenix_kit_current_scope] do
       %Scope{user: user} when not is_nil(user) ->
@@ -1954,94 +1954,19 @@ defmodule PhoenixKitSync.Web.Receiver do
     end
   end
 
-  defp fetch_local_counts(tables) do
-    Enum.reduce(tables, %{}, fn table, acc ->
-      case SchemaInspector.get_local_count(table["name"]) do
-        {:ok, count} -> Map.put(acc, table["name"], count)
-        _ -> acc
-      end
-    end)
-  end
-
-  defp count_new_tables(tables, local_counts) do
-    Enum.count(tables, fn table ->
-      not Map.has_key?(local_counts, table["name"])
-    end)
-  end
-
-  defp count_different_tables(tables, local_counts) do
-    Enum.count(tables, fn table ->
-      name = table["name"]
-      local_count = Map.get(local_counts, name)
-      sender_count = table["estimated_count"] || 0
-
-      not is_nil(local_count) and local_count != sender_count
-    end)
-  end
-
-  defp count_same_tables(tables, local_counts) do
-    Enum.count(tables, fn table ->
-      name = table["name"]
-      local_count = Map.get(local_counts, name)
-      sender_count = table["estimated_count"] || 0
-
-      not is_nil(local_count) and local_count == sender_count
-    end)
-  end
-
-  # Parse a comma-separated list of IDs into integers
-  defp parse_id_list(ids_string) when is_binary(ids_string) do
-    ids_string
-    |> String.split([",", " ", "\n"], trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.map(&parse_int(&1, nil))
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp parse_id_list(_), do: []
-
-  defp parse_int(str, default) when is_binary(str) do
-    case Integer.parse(String.trim(str)) do
-      {int, _} -> int
-      :error -> default
-    end
-  end
-
-  defp parse_int(_, default), do: default
-
-  # Get the primary key from a record (prefers "uuid", falls back to "id")
-  defp get_record_id(record) when is_map(record) do
-    Map.get(record, "uuid") || Map.get(record, :uuid) ||
-      Map.get(record, "id") || Map.get(record, :id)
-  end
-
-  defp get_record_id(_), do: nil
-
-  # Get table info by name from tables list
-  defp get_table_info(tables, table_name) do
-    Enum.find(tables, fn t -> t["name"] == table_name end)
-  end
-
-  # Get schema columns, handling both atom and string keys
-  defp get_schema_columns(nil), do: []
-
-  defp get_schema_columns(schema) when is_map(schema) do
-    # Try both atom and string keys (data comes through JSON as strings)
-    Map.get(schema, :columns) || Map.get(schema, "columns") || []
-  end
-
-  defp get_schema_columns(_), do: []
-
-  # Filter records based on filter mode
-  defp filter_records_by_mode(records, %{mode: :ids, ids: ids_string}) do
-    ids = parse_id_list(ids_string)
-
-    if Enum.empty?(ids) do
-      records
-    else
-      Enum.filter(records, fn r -> get_record_id(r) in ids end)
-    end
-  end
-
-  defp filter_records_by_mode(records, _filter), do: records
+  # Pure helpers (format/parse/count) live in Receiver.Helpers to keep this
+  # file focused on the LV callbacks and render body.
+  defdelegate format_number(num), to: Helpers
+  defdelegate format_strategy(strategy), to: Helpers
+  defdelegate format_connection_error(reason), to: Helpers
+  defdelegate fetch_local_counts(tables), to: Helpers
+  defdelegate count_new_tables(tables, local_counts), to: Helpers
+  defdelegate count_different_tables(tables, local_counts), to: Helpers
+  defdelegate count_same_tables(tables, local_counts), to: Helpers
+  defdelegate parse_id_list(ids), to: Helpers
+  defdelegate parse_int(str, default), to: Helpers
+  defdelegate get_record_id(record), to: Helpers
+  defdelegate get_table_info(tables, name), to: Helpers
+  defdelegate get_schema_columns(schema), to: Helpers
+  defdelegate filter_records_by_mode(records, filter), to: Helpers
 end

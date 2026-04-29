@@ -10,6 +10,8 @@ defmodule PhoenixKitSync.Web.Index do
   use PhoenixKitWeb, :live_view
   use Gettext, backend: PhoenixKitWeb.Gettext
 
+  require Logger
+
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitSync
@@ -38,6 +40,14 @@ defmodule PhoenixKitSync.Web.Index do
 
   @impl true
   def handle_params(_params, _url, socket) do
+    {:noreply, socket}
+  end
+
+  # Catch-all so a stray PubSub message or an internal monitor signal can't
+  # crash the LV. Mirrors the defensive clause on ConnectionsLive.
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.Index] unhandled message | msg=#{inspect(msg)}")
     {:noreply, socket}
   end
 

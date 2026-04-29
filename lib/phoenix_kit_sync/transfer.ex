@@ -129,6 +129,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Creates a changeset for transfer creation.
   """
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(transfer, attrs) do
     transfer
     |> cast(attrs, [
@@ -158,6 +159,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for starting a transfer.
   """
+  @spec start_changeset(t()) :: Ecto.Changeset.t()
   def start_changeset(transfer) do
     transfer
     |> change(%{
@@ -169,6 +171,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for updating transfer progress.
   """
+  @spec progress_changeset(t(), map()) :: Ecto.Changeset.t()
   def progress_changeset(transfer, attrs) do
     transfer
     |> cast(attrs, [
@@ -190,6 +193,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for completing a transfer successfully.
   """
+  @spec complete_changeset(t(), map()) :: Ecto.Changeset.t()
   def complete_changeset(transfer, attrs \\ %{}) do
     transfer
     |> cast(attrs, [
@@ -209,6 +213,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for marking a transfer as failed.
   """
+  @spec fail_changeset(t(), String.t()) :: Ecto.Changeset.t()
   def fail_changeset(transfer, error_message) do
     transfer
     |> change(%{
@@ -221,6 +226,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for cancelling a transfer.
   """
+  @spec cancel_changeset(t()) :: Ecto.Changeset.t()
   def cancel_changeset(transfer) do
     transfer
     |> change(%{
@@ -232,6 +238,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for requesting approval.
   """
+  @spec request_approval_changeset(t(), pos_integer()) :: Ecto.Changeset.t()
   def request_approval_changeset(transfer, expires_in_hours \\ 24) do
     expires_at = UtilsDate.utc_now() |> DateTime.add(expires_in_hours * 3600, :second)
 
@@ -246,6 +253,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for approving a transfer.
   """
+  @spec approve_changeset(t(), String.t() | map() | nil) :: Ecto.Changeset.t()
   def approve_changeset(transfer, admin_user_uuid) do
     transfer
     |> change(%{
@@ -258,6 +266,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for denying a transfer.
   """
+  @spec deny_changeset(t(), String.t() | map() | nil, String.t() | nil) :: Ecto.Changeset.t()
   def deny_changeset(transfer, admin_user_uuid, reason \\ nil) do
     transfer
     |> change(%{
@@ -271,6 +280,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Changeset for marking a transfer approval as expired.
   """
+  @spec expire_changeset(t()) :: Ecto.Changeset.t()
   def expire_changeset(transfer) do
     transfer
     |> change(%{status: "expired"})
@@ -287,12 +297,14 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Checks if a transfer is pending approval.
   """
+  @spec pending_approval?(t() | any()) :: boolean()
   def pending_approval?(%__MODULE__{status: "pending_approval"}), do: true
   def pending_approval?(_), do: false
 
   @doc """
   Checks if a transfer's approval has expired.
   """
+  @spec approval_expired?(t()) :: boolean()
   def approval_expired?(%__MODULE__{approval_expires_at: nil}), do: false
 
   def approval_expired?(%__MODULE__{approval_expires_at: expires_at}) do
@@ -302,6 +314,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Checks if a transfer can be started.
   """
+  @spec can_start?(t() | any()) :: boolean()
   def can_start?(%__MODULE__{status: "pending", requires_approval: false}), do: true
   def can_start?(%__MODULE__{status: "approved"}), do: true
   def can_start?(_), do: false
@@ -309,6 +322,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Checks if a transfer is in a terminal state.
   """
+  @spec terminal?(t() | any()) :: boolean()
   def terminal?(%__MODULE__{status: status})
       when status in ["completed", "failed", "cancelled", "denied", "expired"],
       do: true
@@ -318,6 +332,7 @@ defmodule PhoenixKitSync.Transfer do
   @doc """
   Checks if a transfer is currently active.
   """
+  @spec active?(t() | any()) :: boolean()
   def active?(%__MODULE__{status: "in_progress"}), do: true
   def active?(_), do: false
 
@@ -325,6 +340,7 @@ defmodule PhoenixKitSync.Transfer do
   Calculates the success rate of a transfer.
   Returns a float between 0.0 and 1.0.
   """
+  @spec success_rate(t()) :: float()
   def success_rate(%__MODULE__{records_transferred: 0}), do: 0.0
 
   def success_rate(%__MODULE__{
@@ -339,6 +355,7 @@ defmodule PhoenixKitSync.Transfer do
   Calculates the transfer duration in seconds.
   Returns nil if transfer hasn't completed.
   """
+  @spec duration_seconds(t()) :: non_neg_integer() | nil
   def duration_seconds(%__MODULE__{started_at: nil}), do: nil
   def duration_seconds(%__MODULE__{completed_at: nil}), do: nil
 

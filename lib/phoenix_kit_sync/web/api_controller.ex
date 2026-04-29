@@ -25,6 +25,7 @@ defmodule PhoenixKitSync.Web.ApiController do
   alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKitSync
   alias PhoenixKitSync.Connections
+  alias PhoenixKitSync.Errors
   alias PhoenixKitSync.SchemaInspector
   alias PhoenixKitSync.Transfers
 
@@ -83,10 +84,7 @@ defmodule PhoenixKitSync.Web.ApiController do
     else
       {:error, :module_disabled} ->
         Logger.warning("[Sync.API] register_connection rejected: module disabled")
-
-        conn
-        |> put_status(503)
-        |> json(%{success: false, error: "DB Sync module is disabled"})
+        render_json_error(conn, 503, :module_disabled)
 
       {:error, :incoming_denied} ->
         Logger.warning(
@@ -95,9 +93,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| incoming_mode=#{PhoenixKitSync.get_incoming_mode()}"
         )
 
-        conn
-        |> put_status(403)
-        |> json(%{success: false, error: "Incoming connections are not allowed"})
+        render_json_error(conn, 403, :incoming_denied)
 
       {:error, :missing_fields, fields} ->
         Logger.warning(
@@ -106,9 +102,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| params_keys=#{inspect(Map.keys(params))}"
         )
 
-        conn
-        |> put_status(400)
-        |> json(%{success: false, error: "Missing required fields", fields: fields})
+        render_json_error(conn, 400, :missing_fields, %{fields: fields})
 
       {:error, :invalid_password} ->
         Logger.warning(
@@ -116,9 +110,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| sender_url=#{params["sender_url"]}"
         )
 
-        conn
-        |> put_status(401)
-        |> json(%{success: false, error: "Invalid password"})
+        render_json_error(conn, 401, :invalid_password)
 
       {:error, :password_required} ->
         Logger.warning(
@@ -126,9 +118,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| sender_url=#{params["sender_url"]}"
         )
 
-        conn
-        |> put_status(401)
-        |> json(%{success: false, error: "Password required for incoming connections"})
+        render_json_error(conn, 401, :password_required)
 
       {:error, :connection_exists} ->
         Logger.warning(
@@ -136,9 +126,7 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| sender_url=#{params["sender_url"]}"
         )
 
-        conn
-        |> put_status(409)
-        |> json(%{success: false, error: "Connection already exists for this site"})
+        render_json_error(conn, 409, :connection_exists)
 
       {:error, reason} ->
         Logger.error(
@@ -147,10 +135,23 @@ defmodule PhoenixKitSync.Web.ApiController do
             "| error=#{inspect(reason)}"
         )
 
-        conn
-        |> put_status(500)
-        |> json(%{success: false, error: "Failed to create connection"})
+        render_json_error(conn, 500, :fetch_failed)
     end
+  end
+
+  # Renders a standardised JSON error response. Status is the HTTP status
+  # code; reason is an atom from PhoenixKitSync.Errors — dispatches through
+  # Errors.message/1 so every API error string is centrally translated and
+  # consistent. extras is merged into the response body (e.g. `:fields` for
+  # missing-field details).
+  defp render_json_error(conn, status, reason, extras \\ %{}) do
+    body =
+      %{success: false, error: Errors.message(reason)}
+      |> Map.merge(extras)
+
+    conn
+    |> put_status(status)
+    |> json(body)
   end
 
   @doc """
@@ -347,7 +348,13 @@ defmodule PhoenixKitSync.Web.ApiController do
   - 503 Service Unavailable - DB Sync module is disabled
   """
   def get_connection_status(conn, params) do
-    Logger.info("Sync API: get_connection_status called with params: #{inspect(params)}")
+    # Don't inspect the full params map — it contains `auth_token_hash`
+    # which is a sensitive credential. Log only the safe fields.
+    Logger.info(
+      "[Sync.API] get_connection_status called " <>
+        "| receiver_url=#{inspect(params["receiver_url"])} " <>
+        "| has_token_hash=#{params["auth_token_hash"] != nil}"
+    )
 
     with :ok <- check_module_enabled(),
          {:ok, validated} <- validate_get_status_params(params),
@@ -385,7 +392,8 @@ defmodule PhoenixKitSync.Web.ApiController do
 
       {:error, :not_found} ->
         Logger.warning(
-          "Sync API: get_connection_status - connection not found for hash: #{params["auth_token_hash"]}"
+          "Sync API: get_connection_status - connection not found " <>
+            "| has_token_hash=#{params["auth_token_hash"] != nil}"
         )
 
         conn
@@ -413,7 +421,17 @@ defmodule PhoenixKitSync.Web.ApiController do
          {:ok, validated} <- validate_list_tables_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
          :ok <- check_connection_active(connection) do
-      tables = get_syncable_tables()
+      # Authorization: even with a valid token, only return tables this
+      # particular connection is allowed to see (excluded_tables blocklist
+      # AND, if set, the allowed_tables allowlist). Without this filter a
+      # leaked token would grant blanket DB access regardless of the
+      # connection's intended scope.
+      tables =
+        get_syncable_tables()
+        |> Enum.filter(fn table ->
+          name = Map.get(table, :name) || Map.get(table, "name")
+          PhoenixKitSync.Connection.table_allowed?(connection, name)
+        end)
 
       # Update last_connected_at
       Connections.update_connection(connection, %{last_connected_at: UtilsDate.utc_now()})
@@ -466,6 +484,7 @@ defmodule PhoenixKitSync.Web.ApiController do
          {:ok, validated} <- validate_pull_data_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
          :ok <- check_connection_active(connection),
+         :ok <- check_table_allowed(connection, validated.table_name),
          {:ok, data} <- fetch_table_data(validated.table_name, connection) do
       # Update connection stats
       record_count = length(data)
@@ -522,6 +541,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         |> put_status(404)
         |> json(%{success: false, error: "Table not found"})
 
+      {:error, :table_not_allowed} ->
+        render_json_error(conn, 403, :table_not_allowed)
+
       {:error, reason} ->
         Logger.error("Failed to pull data", %{reason: inspect(reason)})
 
@@ -547,7 +569,8 @@ defmodule PhoenixKitSync.Web.ApiController do
     with :ok <- check_module_enabled(),
          {:ok, validated} <- validate_schema_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
-         :ok <- check_connection_active(connection) do
+         :ok <- check_connection_active(connection),
+         :ok <- check_table_allowed(connection, validated.table_name) do
       table_name = validated.table_name
 
       # Check if table is in syncable list
@@ -582,6 +605,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         conn
         |> put_status(400)
         |> json(%{success: false, error: "Missing required fields: #{Enum.join(fields, ", ")}"})
+
+      {:error, :table_not_allowed} ->
+        render_json_error(conn, 403, :table_not_allowed)
     end
   end
 
@@ -605,7 +631,8 @@ defmodule PhoenixKitSync.Web.ApiController do
     with :ok <- check_module_enabled(),
          {:ok, validated} <- validate_records_params(params),
          {:ok, connection} <- find_sender_by_hash(validated.auth_token_hash),
-         :ok <- check_connection_active(connection) do
+         :ok <- check_connection_active(connection),
+         :ok <- check_table_allowed(connection, validated.table_name) do
       table_name = validated.table_name
       limit = min(validated.limit, 100)
       offset = validated.offset
@@ -653,6 +680,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         conn
         |> put_status(400)
         |> json(%{success: false, error: "Missing required fields: #{Enum.join(fields, ", ")}"})
+
+      {:error, :table_not_allowed} ->
+        render_json_error(conn, 403, :table_not_allowed)
     end
   end
 
@@ -715,56 +745,19 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp validate_params(params) do
-    required_fields = ["sender_url", "connection_name", "auth_token"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
+  # Validators live in ApiController.Validators. Local thin wrappers keep
+  # the existing call-site names.
+  alias PhoenixKitSync.Web.ApiController.Validators
 
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         sender_url: params["sender_url"],
-         connection_name: params["connection_name"],
-         auth_token: params["auth_token"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp validate_delete_params(params) do
-    required_fields = ["sender_url", "auth_token_hash"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         sender_url: params["sender_url"],
-         auth_token_hash: params["auth_token_hash"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
+  defp validate_params(params), do: Validators.validate_register(params)
+  defp validate_delete_params(params), do: Validators.validate_delete(params)
+  defp validate_get_status_params(params), do: Validators.validate_get_status(params)
+  defp validate_status_params(params), do: Validators.validate_status(params)
 
   defp find_connection_by_hash(sender_url, auth_token_hash) do
     case Connections.find_by_site_url_and_hash(sender_url, auth_token_hash) do
       nil -> {:error, :not_found}
       connection -> {:ok, connection}
-    end
-  end
-
-  defp validate_get_status_params(params) do
-    required_fields = ["receiver_url", "auth_token_hash"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         receiver_url: params["receiver_url"],
-         auth_token_hash: params["auth_token_hash"]
-       }}
-    else
-      {:error, :missing_fields, missing}
     end
   end
 
@@ -779,27 +772,6 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp validate_status_params(params) do
-    required_fields = ["sender_url", "auth_token_hash", "status"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    cond do
-      not Enum.empty?(missing) ->
-        {:error, :missing_fields, missing}
-
-      params["status"] not in ["active", "suspended", "revoked"] ->
-        {:error, :invalid_status}
-
-      true ->
-        {:ok,
-         %{
-           sender_url: params["sender_url"],
-           auth_token_hash: params["auth_token_hash"],
-           status: params["status"]
-         }}
-    end
-  end
-
   defp update_connection_status(connection, new_status) do
     Connections.update_connection(connection, %{status: new_status})
   end
@@ -811,13 +783,22 @@ defmodule PhoenixKitSync.Web.ApiController do
 
         cond do
           is_nil(stored_password) or stored_password == "" ->
-            # No password set but mode requires it - accept for now
-            :ok
+            # Mode requires a password but none is configured. Refuse to
+            # auto-accept (the previous behaviour was a silent bypass —
+            # any registration would succeed if the admin enabled the
+            # mode but forgot to set the password). Require an admin to
+            # complete the configuration before any incoming registration
+            # can proceed.
+            Logger.warning(
+              "[Sync.API] Refusing registration: incoming_mode=require_password but no password is configured"
+            )
+
+            {:error, :password_required}
 
           is_nil(provided_password) or provided_password == "" ->
             {:error, :password_required}
 
-          provided_password == stored_password ->
+          Plug.Crypto.secure_compare(provided_password, stored_password) ->
             :ok
 
           true ->
@@ -930,32 +911,8 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp validate_list_tables_params(params) do
-    required_fields = ["auth_token_hash"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok, %{auth_token_hash: params["auth_token_hash"]}}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp validate_pull_data_params(params) do
-    required_fields = ["auth_token_hash", "table_name"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         auth_token_hash: params["auth_token_hash"],
-         table_name: params["table_name"],
-         conflict_strategy: params["conflict_strategy"] || "skip"
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
+  defp validate_list_tables_params(params), do: Validators.validate_list_tables(params)
+  defp validate_pull_data_params(params), do: Validators.validate_pull_data(params)
 
   defp find_sender_by_hash(auth_token_hash) do
     case Connections.find_by_hash_and_direction(auth_token_hash, "sender") do
@@ -969,6 +926,18 @@ defmodule PhoenixKitSync.Web.ApiController do
       :ok
     else
       {:error, :connection_not_active}
+    end
+  end
+
+  # Per-connection table authorization. Even with a valid auth token, a
+  # connection can only access tables that pass its excluded_tables /
+  # allowed_tables filter. Returns `{:error, :table_not_allowed}` so the
+  # action's `with` chain rejects with a 403 (handled in each error case).
+  defp check_table_allowed(connection, table_name) do
+    if PhoenixKitSync.Connection.table_allowed?(connection, table_name) do
+      :ok
+    else
+      {:error, :table_not_allowed}
     end
   end
 
@@ -1007,7 +976,9 @@ defmodule PhoenixKitSync.Web.ApiController do
         []
     end
   rescue
-    _ -> []
+    e ->
+      Logger.error("[Sync.API] get_syncable_tables crashed: #{inspect(e)}")
+      []
   end
 
   defp build_table_info(repo, name, size_bytes, fk_map) do
@@ -1041,7 +1012,12 @@ defmodule PhoenixKitSync.Web.ApiController do
       0
     end
   rescue
-    _ -> 0
+    e ->
+      Logger.error(
+        "[Sync.API] get_actual_row_count crashed for #{inspect(table_name)}: #{inspect(e)}"
+      )
+
+      0
   end
 
   defp fetch_table_data(table_name, connection) do
@@ -1071,9 +1047,7 @@ defmodule PhoenixKitSync.Web.ApiController do
     end
   end
 
-  defp valid_table_name?(table_name) do
-    Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_]*$/, table_name)
-  end
+  defp valid_table_name?(table_name), do: Validators.valid_table_name?(table_name)
 
   defp table_exists?(repo, table_name) do
     query = """
@@ -1127,52 +1101,8 @@ defmodule PhoenixKitSync.Web.ApiController do
 
   defp serialize_value(val), do: val
 
-  defp validate_schema_params(params) do
-    required_fields = ["auth_token_hash", "table_name"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         auth_token_hash: params["auth_token_hash"],
-         table_name: params["table_name"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp validate_records_params(params) do
-    required_fields = ["auth_token_hash", "table_name"]
-    missing = Enum.filter(required_fields, &(is_nil(params[&1]) or params[&1] == ""))
-
-    if Enum.empty?(missing) do
-      {:ok,
-       %{
-         auth_token_hash: params["auth_token_hash"],
-         table_name: params["table_name"],
-         limit: parse_int(params["limit"], 10),
-         offset: parse_int(params["offset"], 0),
-         ids: params["ids"],
-         id_start: params["id_start"],
-         id_end: params["id_end"]
-       }}
-    else
-      {:error, :missing_fields, missing}
-    end
-  end
-
-  defp parse_int(nil, default), do: default
-  defp parse_int(val, _default) when is_integer(val), do: val
-
-  defp parse_int(val, default) when is_binary(val) do
-    case Integer.parse(val) do
-      {int, _} -> int
-      :error -> default
-    end
-  end
-
-  defp parse_int(_, default), do: default
+  defp validate_schema_params(params), do: Validators.validate_schema(params)
+  defp validate_records_params(params), do: Validators.validate_records(params)
 
   defp get_table_schema(table_name) do
     if valid_table_name?(table_name) do
@@ -1241,7 +1171,7 @@ defmodule PhoenixKitSync.Web.ApiController do
   end
 
   defp fetch_filtered_records(repo, table_name, limit, offset, filter_opts) do
-    pk_col = PhoenixKit.RepoHelper.get_pk_column(table_name)
+    pk_col = resolve_pk_column(table_name)
     {where_clause, params, next_param} = build_where_clause(filter_opts, pk_col)
 
     data_query =
@@ -1255,6 +1185,18 @@ defmodule PhoenixKitSync.Web.ApiController do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # PhoenixKit.RepoHelper.get_pk_column/1 falls back to "id" for any
+  # table it doesn't recognise as an Ecto schema. That's wrong for
+  # phoenix_kit's UUIDv7-PK tables (and any other UUID-PK table). Query
+  # Postgres directly via SchemaInspector.get_primary_key/2 — works for
+  # any real table.
+  defp resolve_pk_column(table_name) do
+    case SchemaInspector.get_primary_key(table_name) do
+      {:ok, [pk | _]} when is_binary(pk) -> pk
+      _ -> "id"
     end
   end
 

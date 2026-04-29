@@ -26,12 +26,13 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     project_title = Settings.get_project_title()
     config = PhoenixKitSync.get_config()
 
-    # Subscribe to connection updates
+    # Subscribe to connection updates. Topic name lives on `Connections`
+    # so broadcast and subscribe sites can never drift.
     if connected?(socket) do
       pubsub = PhoenixKit.Config.pubsub_server()
 
       if pubsub do
-        Phoenix.PubSub.subscribe(pubsub, "sync:connections")
+        Phoenix.PubSub.subscribe(pubsub, Connections.pubsub_topic())
       end
     end
 
@@ -44,7 +45,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       |> assign(:config, config)
       |> assign(:view_mode, :list)
       |> assign(:selected_connection, nil)
-      |> assign(:changeset, nil)
+      |> assign_form(nil)
       |> assign(:direction_filter, nil)
       |> assign(:sender_statuses, %{})
       |> load_connections()
@@ -65,7 +66,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     socket
     |> assign(:view_mode, :new)
-    |> assign(:changeset, changeset)
+    |> assign_form(changeset)
   end
 
   defp handle_action(socket, "edit", id, _params) when not is_nil(id) do
@@ -84,7 +85,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     socket
     |> assign(:view_mode, :list)
     |> assign(:selected_connection, nil)
-    |> assign(:changeset, nil)
+    |> assign_form(nil)
     |> assign(:direction_filter, params["direction"])
     |> load_connections()
   end
@@ -93,7 +94,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     case Connections.get_connection(id) do
       nil ->
         socket
-        |> put_flash(:error, "Connection not found")
+        |> put_flash(:error, gettext("Connection not found"))
         |> assign(:view_mode, :list)
         |> load_connections()
 
@@ -108,7 +109,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     socket
     |> assign(:view_mode, :edit)
     |> assign(:selected_connection, connection)
-    |> assign(:changeset, changeset)
+    |> assign_form(changeset)
   end
 
   defp setup_connection_view(socket, connection, :show) do
@@ -121,7 +122,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     case Connections.get_connection(id) do
       nil ->
         socket
-        |> put_flash(:error, "Connection not found")
+        |> put_flash(:error, gettext("Connection not found"))
         |> assign(:view_mode, :list)
         |> load_connections()
 
@@ -183,68 +184,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     |> assign(:receiver_connections, receiver_connections)
   end
 
-  defp fetch_sender_statuses(receiver_connections) do
-    pid = self()
+  # Status fetch + verification helpers live in ConnectionsLive.Status to
+  # keep this file focused on the LV callbacks themselves. The sibling
+  # module spawns linked tasks that post result messages back to this LV.
+  defdelegate fetch_sender_statuses(receiver_connections),
+    to: PhoenixKitSync.Web.ConnectionsLive.Status
 
-    Enum.each(receiver_connections, fn conn ->
-      Task.start(fn ->
-        status = resolve_sender_status(conn)
-        send(pid, {:sender_status_fetched, conn.uuid, status})
-      end)
-    end)
-  end
-
-  defp resolve_sender_status(conn) do
-    case ConnectionNotifier.query_sender_status(conn) do
-      {:ok, status} when is_binary(status) -> status
-      {:ok, :offline} -> "offline"
-      {:ok, :not_found} -> "not_found"
-      {:error, _reason} -> "error"
-    end
-  end
-
-  defp verify_receiver_connections(sender_connections) do
-    pid = self()
-
-    Enum.each(sender_connections, fn conn ->
-      if should_verify_connection?(conn) do
-        verify_single_connection(conn, pid)
-      end
-    end)
-  end
-
-  defp should_verify_connection?(conn) do
-    notification_success =
-      get_in(conn.metadata || %{}, ["remote_notification", "notification_success"])
-
-    conn.status in ["active", "pending", "suspended"] && notification_success == true
-  end
-
-  defp verify_single_connection(conn, pid) do
-    Task.start(fn ->
-      handle_verification_result(ConnectionNotifier.verify_connection(conn), conn.uuid, pid)
-    end)
-  end
-
-  defp handle_verification_result({:ok, :not_found}, conn_uuid, pid) do
-    Logger.warning("[Sync.Connections] Verify returned not_found for connection #{conn_uuid}")
-
-    send(pid, {:receiver_connection_severed, conn_uuid})
-  end
-
-  defp handle_verification_result({:ok, :offline}, conn_uuid, _pid) do
-    Logger.debug("[Sync.Connections] Remote site offline during verify | uuid=#{conn_uuid}")
-  end
-
-  defp handle_verification_result({:error, reason}, conn_uuid, _pid) do
-    Logger.warning(
-      "[Sync.Connections] Verify failed for connection #{conn_uuid} | error=#{inspect(reason)}"
-    )
-
-    # Don't trigger severed on errors — could be transient network issue or hot reload
-  end
-
-  defp handle_verification_result(_result, _conn_uuid, _pid), do: :ok
+  defdelegate verify_receiver_connections(sender_connections),
+    to: PhoenixKitSync.Web.ConnectionsLive.Status
 
   @impl true
   def handle_event("filter", %{"direction" => direction}, socket) do
@@ -287,7 +234,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
           |> Map.put(:action, :validate)
       end
 
-    {:noreply, assign(socket, :changeset, changeset)}
+    {:noreply, assign_form(socket, changeset)}
   end
 
   def handle_event("save", %{"connection" => params}, socket) do
@@ -303,20 +250,21 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.approve_connection(connection, current_user.uuid) do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        # Fire-and-forget: the DB change is committed; the remote site must
+        # hear about it even if the admin closes the tab.
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "active")
         end)
 
         socket =
           socket
-          |> put_flash(:info, "Connection approved")
+          |> put_flash(:info, gettext("Connection approved"))
           |> load_connections()
 
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to approve connection")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to approve connection"))}
     end
   end
 
@@ -326,42 +274,41 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.suspend_connection(connection, current_user.uuid) do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "suspended")
         end)
 
         socket =
           socket
-          |> put_flash(:info, "Connection suspended")
+          |> put_flash(:info, gettext("Connection suspended"))
           |> load_connections()
 
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to suspend connection")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to suspend connection"))}
     end
   end
 
   def handle_event("reactivate_connection", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
+    current_user = socket.assigns.phoenix_kit_current_scope.user
 
-    case Connections.reactivate_connection(connection) do
+    case Connections.reactivate_connection(connection, actor_uuid: current_user.uuid) do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "active")
         end)
 
         socket =
           socket
-          |> put_flash(:info, "Connection reactivated")
+          |> put_flash(:info, gettext("Connection reactivated"))
           |> load_connections()
 
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to reactivate connection")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to reactivate connection"))}
     end
   end
 
@@ -371,54 +318,54 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     case Connections.revoke_connection(connection, current_user.uuid, "Revoked by admin") do
       {:ok, updated_connection} ->
-        # Notify receiver of status change (async)
-        Task.start(fn ->
+        notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "revoked")
         end)
 
         socket =
           socket
-          |> put_flash(:info, "Connection revoked")
+          |> put_flash(:info, gettext("Connection revoked"))
           |> load_connections()
 
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to revoke connection")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to revoke connection"))}
     end
   end
 
   def handle_event("regenerate_token", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
+    current_user = socket.assigns.phoenix_kit_current_scope.user
 
-    case Connections.regenerate_token(connection) do
+    case Connections.regenerate_token(connection, actor_uuid: current_user.uuid) do
       {:ok, _connection, _new_token} ->
         socket =
           socket
-          |> put_flash(:info, "Token regenerated")
+          |> put_flash(:info, gettext("Token regenerated"))
           |> load_connections()
 
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to regenerate token")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to regenerate token"))}
     end
   end
 
   def handle_event("delete_connection", %{"uuid" => uuid}, socket) do
     connection = Connections.get_connection!(uuid)
+    current_user = socket.assigns.phoenix_kit_current_scope.user
 
-    # Notify the remote site about the deletion (async)
-    Task.start(fn ->
+    notify_remote_async(fn ->
       ConnectionNotifier.notify_delete(connection)
     end)
 
-    case Connections.delete_connection(connection) do
+    case Connections.delete_connection(connection, actor_uuid: current_user.uuid) do
       {:ok, _connection} ->
         message =
           if connection.direction == "receiver",
-            do: "Connection severed",
-            else: "Connection deleted"
+            do: gettext("Connection severed"),
+            else: gettext("Connection deleted")
 
         socket =
           socket
@@ -429,7 +376,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         {:noreply, push_patch(socket, to: path)}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to delete connection")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to delete connection"))}
     end
   end
 
@@ -550,7 +497,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       |> sort_by_dependencies(tables)
 
     if Enum.empty?(selected_tables) do
-      {:noreply, put_flash(socket, :error, "Please select at least one table")}
+      {:noreply, put_flash(socket, :error, gettext("Please select at least one table"))}
     else
       socket =
         socket
@@ -660,7 +607,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             socket
             |> assign(:creating_table, false)
             |> assign(:local_table_exists, true)
-            |> put_flash(:info, "Table #{table} created successfully")
+            |> put_flash(:info, gettext("Table %{table} created successfully", table: table))
 
           {:noreply, socket}
 
@@ -668,7 +615,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
           socket =
             socket
             |> assign(:creating_table, false)
-            |> put_flash(:error, "Failed to create table: #{inspect(reason)}")
+            |> put_flash(
+              :error,
+              gettext("Failed to create table: %{reason}", reason: inspect(reason))
+            )
 
           {:noreply, socket}
       end
@@ -715,7 +665,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_info({:fetch_sender_tables, connection}, socket) do
     liveview_pid = self()
 
-    Task.start(fn ->
+    # Linked: result is only used to render the table picker; no point
+    # continuing if the LV is gone.
+    Task.start_link(fn ->
       result = ConnectionNotifier.fetch_sender_tables(connection)
       send(liveview_pid, {:sender_tables_result, result})
     end)
@@ -756,7 +708,8 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_info({:fetch_table_schema, connection, table_name}, socket) do
     liveview_pid = self()
 
-    Task.start(fn ->
+    # Linked: schema fetch is render-only.
+    Task.start_link(fn ->
       result = ConnectionNotifier.fetch_table_schema(connection, table_name)
       send(liveview_pid, {:table_schema_result, table_name, result})
     end)
@@ -782,7 +735,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             socket
             |> assign(:detail_table_schema, nil)
             |> assign(:loading_schema, false)
-            |> put_flash(:error, "Failed to load schema: #{inspect(reason)}")
+            |> put_flash(
+              :error,
+              gettext("Failed to load schema: %{reason}", reason: inspect(reason))
+            )
         end
 
       {:noreply, socket}
@@ -795,7 +751,8 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
   def handle_info({:fetch_preview_records, connection, table_name, filter}, socket) do
     liveview_pid = self()
 
-    Task.start(fn ->
+    # Linked: record preview is render-only.
+    Task.start_link(fn ->
       opts =
         case filter.mode do
           :all ->
@@ -829,7 +786,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             socket
             |> assign(:detail_preview, nil)
             |> assign(:loading_preview, false)
-            |> put_flash(:error, "Failed to load preview: #{inspect(reason)}")
+            |> put_flash(
+              :error,
+              gettext("Failed to load preview: %{reason}", reason: inspect(reason))
+            )
         end
 
       {:noreply, socket}
@@ -843,7 +803,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     liveview_pid = self()
     strategy = socket.assigns.conflict_strategy
 
-    Task.start(fn ->
+    # Supervised: this actually mutates the local DB mid-stream; cancelling
+    # mid-flight would leave partial imports. Let it run to completion and
+    # report its result even if the admin navigated away.
+    notify_remote_async(fn ->
       opts =
         case filter.mode do
           :all ->
@@ -936,7 +899,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
     socket = assign(socket, :sync_progress, progress)
 
-    Task.start(fn ->
+    # Supervised: same reason as detail sync above — importer writes to the
+    # local DB and must finish even if the LV dies.
+    notify_remote_async(fn ->
       case ConnectionNotifier.pull_table_data_with_remap(
              connection,
              table,
@@ -1041,8 +1006,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               socket
               |> put_flash(
                 :warning,
-                "Connection '#{connection.name}' suspended — remote site reports it no longer exists. " <>
-                  "You can delete it or reactivate and re-verify."
+                gettext(
+                  "Connection '%{name}' suspended — remote site reports it no longer exists. You can delete it or reactivate and re-verify.",
+                  name: connection.name
+                )
               )
               |> load_connections()
 
@@ -1073,7 +1040,19 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     {:noreply, load_connections(socket, skip_async: true)}
   end
 
-  defp extract_sync_counts(result) do
+  # Catch-all so a stray PubSub message or an internal monitor signal can't
+  # crash the LV (which would lose any unsaved form input the admin has
+  # typed). Receiver, Sender, History, and Index LVs share this clause.
+  def handle_info(msg, socket) do
+    Logger.debug("[ConnectionsLive] unhandled message | msg=#{inspect(msg)}")
+    {:noreply, socket}
+  end
+
+  @doc false
+  # Public-but-not-API: exposed so tests can pin the gettext-translated
+  # error strings without driving a full sync flow. Used internally by
+  # process_table_sync_result/3.
+  def extract_sync_counts(result) do
     case result do
       {:ok, %{imported: imported, skipped: skipped, errors: errors}} ->
         {imported, skipped, errors, nil}
@@ -1082,22 +1061,22 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         {count, 0, 0, nil}
 
       {:error, :offline} ->
-        {0, 0, 0, "Sender is offline"}
+        {0, 0, 0, gettext("Sender is offline")}
 
       {:error, :unauthorized} ->
-        {0, 0, 0, "Unauthorized - check connection token"}
+        {0, 0, 0, gettext("Unauthorized - check connection token")}
 
       {:error, :table_not_found} ->
-        {0, 0, 0, "Table not found on sender"}
+        {0, 0, 0, gettext("Table not found on sender")}
 
       {:error, reason} when is_binary(reason) ->
         {0, 0, 0, reason}
 
       {:error, reason} ->
-        {0, 0, 0, "Sync failed: #{inspect(reason)}"}
+        {0, 0, 0, gettext("Sync failed: %{reason}", reason: inspect(reason))}
 
       _ ->
-        {0, 0, 0, "Unknown error"}
+        {0, 0, 0, gettext("Unknown error")}
     end
   end
 
@@ -1312,7 +1291,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
         socket =
           socket
-          |> put_flash(:info, "Connection created successfully")
+          |> put_flash(:info, gettext("Connection created successfully"))
           |> load_connections()
 
         path = Routes.path("/admin/sync/connections")
@@ -1326,23 +1305,29 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             "| errors=#{inspect(changeset.errors)}"
         )
 
-        {:noreply, assign(socket, :changeset, changeset)}
+        {:noreply, assign_form(socket, changeset)}
     end
   end
 
   defp do_update_connection(socket, params) do
-    case Connections.update_connection(socket.assigns.selected_connection, params) do
+    actor_uuid = socket.assigns.phoenix_kit_current_scope.user.uuid
+
+    case Connections.update_connection(
+           socket.assigns.selected_connection,
+           params,
+           actor_uuid: actor_uuid
+         ) do
       {:ok, _connection} ->
         socket =
           socket
-          |> put_flash(:info, "Connection updated successfully")
+          |> put_flash(:info, gettext("Connection updated successfully"))
           |> load_connections()
 
         path = Routes.path("/admin/sync/connections")
         {:noreply, push_patch(socket, to: path)}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :changeset, changeset)}
+        {:noreply, assign_form(socket, changeset)}
     end
   end
 
@@ -1371,7 +1356,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         <%= if not @config.enabled do %>
           <div class="alert alert-warning mb-6">
             <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
-            <span>DB Sync module is disabled.</span>
+            <span>{gettext("DB Sync module is disabled.")}</span>
           </div>
         <% end %>
 
@@ -1384,10 +1369,11 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               sender_statuses={@sender_statuses}
             />
           <% :new -> %>
-            <.connection_form changeset={@changeset} action={:new} />
+            <.connection_form changeset={@changeset} form={@form} action={:new} />
           <% :edit -> %>
             <.connection_form
               changeset={@changeset}
+              form={@form}
               action={:edit}
               connection={@selected_connection}
             />
@@ -1560,6 +1546,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
           type="button"
           phx-click="start_sync"
           phx-value-uuid={@connection.uuid}
+          phx-disable-with={gettext("Loading…")}
           class="btn btn-primary btn-xs tooltip tooltip-bottom"
           data-tip={gettext("Sync data")}
         >
@@ -1592,13 +1579,14 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         type="button"
         phx-click="delete_connection"
         phx-value-uuid={@connection.uuid}
+        phx-disable-with={gettext("Deleting…")}
         class="btn btn-error btn-xs tooltip tooltip-bottom"
         data-tip={
           if @connection.direction == "receiver",
             do: gettext("Sever connection"),
             else: gettext("Delete connection")
         }
-        data-confirm="Are you sure you want to delete this connection? You will need to set it up again."
+        data-confirm={gettext("Are you sure you want to delete this connection? You will need to set it up again.")}
       >
         <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
         <span class="sm:hidden whitespace-nowrap">
@@ -1616,6 +1604,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             type="button"
             phx-click="approve_connection"
             phx-value-uuid={@connection.uuid}
+            phx-disable-with={gettext("Approving…")}
             class="btn btn-success btn-xs tooltip tooltip-bottom"
             data-tip={gettext("Approve")}
           >
@@ -1628,6 +1617,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             type="button"
             phx-click="suspend_connection"
             phx-value-uuid={@connection.uuid}
+            phx-disable-with={gettext("Suspending…")}
             class="btn btn-warning btn-xs tooltip tooltip-bottom"
             data-tip={gettext("Suspend")}
           >
@@ -1640,6 +1630,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             type="button"
             phx-click="reactivate_connection"
             phx-value-uuid={@connection.uuid}
+            phx-disable-with={gettext("Reactivating…")}
             class="btn btn-info btn-xs tooltip tooltip-bottom"
             data-tip={gettext("Reactivate")}
           >
@@ -1671,25 +1662,19 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         </h2>
 
         <.form
-          for={@changeset}
+          for={@form}
+          phx-change="validate"
           phx-submit="save"
           class="space-y-6"
         >
           <%!-- Name Field --%>
-          <div>
-            <label class="block text-sm font-medium mb-2">Name *</label>
-            <input
-              type="text"
-              name="connection[name]"
-              value={Ecto.Changeset.get_field(@changeset, :name)}
-              class={"input input-bordered w-full #{if @changeset.action && @changeset.errors[:name], do: "input-error"}"}
-              placeholder="Production Server"
-              required
-            />
-            <%= if @changeset.action && @changeset.errors[:name] do %>
-              <p class="text-error text-sm mt-1">{elem(@changeset.errors[:name], 0)}</p>
-            <% end %>
-          </div>
+          <.input
+            field={@form[:name]}
+            type="text"
+            label={gettext("Name *")}
+            placeholder={gettext("Production Server")}
+            required
+          />
 
           <%!-- Direction Field --%>
           <div>
@@ -1714,17 +1699,15 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
 
           <%!-- Site URL Field --%>
           <div>
-            <label class="block text-sm font-medium mb-2">Site URL *</label>
-            <input
+            <.input
+              field={@form[:site_url]}
               type="url"
-              name="connection[site_url]"
-              value={Ecto.Changeset.get_field(@changeset, :site_url)}
-              class={"input input-bordered w-full #{if @changeset.action && @changeset.errors[:site_url], do: "input-error"}"}
+              label={gettext("Site URL *")}
               placeholder="https://example.com"
               required
             />
             <p class="text-sm text-base-content/60 mt-1">
-              The URL of the remote site that will connect to pull data
+              {gettext("The URL of the remote site that will connect to pull data")}
             </p>
           </div>
 
@@ -1780,10 +1763,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
           <%!-- Actions --%>
           <div class="flex justify-end gap-2 pt-4">
             <button type="button" phx-click="cancel" class="btn btn-ghost">
-              Cancel
+              {gettext("Cancel")}
             </button>
-            <button type="submit" class="btn btn-primary">
-              {if @action == :new, do: "Create Connection", else: "Save Changes"}
+            <button type="submit" class="btn btn-primary" phx-disable-with={gettext("Saving…")}>
+              {if @action == :new, do: gettext("Create Connection"), else: gettext("Save Changes")}
             </button>
           </div>
         </.form>
@@ -1844,9 +1827,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               <label class="text-sm text-base-content/70">Auto Sync</label>
               <p>
                 <%= if @connection.auto_sync_enabled do %>
-                  <span class="badge badge-success">Enabled</span>
+                  <span class="badge badge-success">{gettext("Enabled")}</span>
                 <% else %>
-                  <span class="badge badge-ghost">Disabled</span>
+                  <span class="badge badge-ghost">{gettext("Disabled")}</span>
                 <% end %>
               </p>
             </div>
@@ -1905,9 +1888,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                 type="button"
                 phx-click="suspend_connection"
                 phx-value-uuid={@connection.uuid}
+                phx-disable-with={gettext("Suspending…")}
                 class="btn btn-warning btn-sm"
               >
-                <.icon name="hero-pause" class="w-4 h-4" /> Suspend
+                <.icon name="hero-pause" class="w-4 h-4" /> {gettext("Suspend")}
               </button>
             <% end %>
 
@@ -1916,9 +1900,10 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                 type="button"
                 phx-click="reactivate_connection"
                 phx-value-uuid={@connection.uuid}
+                phx-disable-with={gettext("Reactivating…")}
                 class="btn btn-info btn-sm"
               >
-                <.icon name="hero-play" class="w-4 h-4" /> Reactivate
+                <.icon name="hero-play" class="w-4 h-4" /> {gettext("Reactivate")}
               </button>
             <% end %>
           <% end %>
@@ -1928,19 +1913,21 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               type="button"
               phx-click="regenerate_token"
               phx-value-uuid={@connection.uuid}
+              phx-disable-with={gettext("Regenerating…")}
               class="btn btn-outline btn-sm"
             >
-              <.icon name="hero-key" class="w-4 h-4" /> Regenerate Token
+              <.icon name="hero-key" class="w-4 h-4" /> {gettext("Regenerate Token")}
             </button>
 
             <button
               type="button"
               phx-click="revoke_connection"
               phx-value-uuid={@connection.uuid}
+              phx-disable-with={gettext("Revoking…")}
               class="btn btn-error btn-sm"
-              data-confirm="Are you sure you want to revoke this connection?"
+              data-confirm={gettext("Are you sure you want to revoke this connection?")}
             >
-              <.icon name="hero-x-mark" class="w-4 h-4" /> Revoke
+              <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Revoke")}
             </button>
           <% end %>
 
@@ -1948,17 +1935,18 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
             type="button"
             phx-click="delete_connection"
             phx-value-uuid={@connection.uuid}
+            phx-disable-with={gettext("Deleting…")}
             class="btn btn-ghost btn-sm text-error"
-            data-confirm="Are you sure you want to delete this connection?"
+            data-confirm={gettext("Are you sure you want to delete this connection?")}
           >
-            <.icon name="hero-trash" class="w-4 h-4" /> Delete
+            <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Delete")}
           </button>
         </div>
 
         <%!-- Back Button --%>
         <div class="card-actions justify-end pt-4">
           <button type="button" phx-click="cancel" class="btn btn-ghost">
-            Back to List
+            {gettext("Back to List")}
           </button>
         </div>
       </div>
@@ -2144,15 +2132,15 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                   <%!-- Legend --%>
                   <div class="bg-base-200 rounded-lg p-3 mb-4 text-sm">
                     <div class="flex flex-wrap gap-x-6 gap-y-1 items-center">
-                      <span class="text-base-content/70">Record counts:</span>
+                      <span class="text-base-content/70">{gettext("Record counts:")}</span>
                       <span>
-                        <span class="font-semibold text-primary">Sender</span> = remote data
+                        <span class="font-semibold text-primary">{gettext("Sender")}</span> = {gettext("remote data")}
                       </span>
                       <span>
-                        <span class="font-semibold text-success">Local</span> = your database
+                        <span class="font-semibold text-success">{gettext("Local")}</span> = {gettext("your database")}
                       </span>
                       <span class="badge badge-warning badge-sm gap-1">
-                        <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> = differs
+                        <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> = {gettext("differs")}
                       </span>
                     </div>
                   </div>
@@ -2261,7 +2249,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                               <%= if is_suggested do %>
                                 <span
                                   class="ml-1 text-warning text-xs tooltip tooltip-right"
-                                  data-tip="Used by selected tables — consider including"
+                                  data-tip={gettext("Used by selected tables — consider including")}
                                 >
                                   ⚠
                                 </span>
@@ -2479,7 +2467,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                   <%= if @loading_schema do %>
                     <div class="flex items-center gap-2 text-base-content/70">
                       <span class="loading loading-spinner loading-sm"></span>
-                      <span>Loading table schema...</span>
+                      <span>{gettext("Loading table schema…")}</span>
                     </div>
                   <% else %>
                     <div class="bg-base-200 rounded-lg p-4">
@@ -2566,9 +2554,9 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                           disabled={@creating_table or is_nil(@detail_table_schema)}
                         >
                           <%= if @creating_table do %>
-                            <span class="loading loading-spinner loading-xs"></span> Creating...
+                            <span class="loading loading-spinner loading-xs"></span> {gettext("Creating…")}
                           <% else %>
-                            <.icon name="hero-plus" class="w-4 h-4" /> Create Table
+                            <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Create Table")}
                           <% end %>
                         </button>
                       </div>
@@ -2626,7 +2614,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                             name="range_start"
                             value={@detail_filter.range_start}
                             class="input input-bordered w-32"
-                            placeholder="From"
+                            placeholder={gettext("From")}
                           />
                           <span>to</span>
                           <input
@@ -2634,7 +2622,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
                             name="range_end"
                             value={@detail_filter.range_end}
                             class="input input-bordered w-32"
-                            placeholder="To"
+                            placeholder={gettext("To")}
                           />
                         </div>
                       <% end %>
@@ -2960,7 +2948,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         "| remote_url=#{connection.site_url}"
     )
 
-    Task.start(fn -> log_remote_notification(connection, token) end)
+    notify_remote_async(fn -> log_remote_notification(connection, token) end)
   end
 
   defp maybe_notify_remote(_connection, _token), do: :ok
@@ -2979,4 +2967,24 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
         )
     end
   end
+
+  # Keeps both `:changeset` (for any future `<.translatable_field>` use)
+  # and `:form = to_form(changeset, as: :connection)` (for the core
+  # `<.input>` / `<.select>` components) in sync. nil changeset clears
+  # both assigns — used when exiting edit/new mode.
+  defp assign_form(socket, nil) do
+    socket
+    |> assign(:changeset, nil)
+    |> assign(:form, nil)
+  end
+
+  defp assign_form(socket, %Ecto.Changeset{} = changeset) do
+    socket
+    |> assign(:changeset, changeset)
+    |> assign(:form, to_form(changeset, as: :connection))
+  end
+
+  # Delegate to PhoenixKitSync.AsyncTasks for the actual supervision. The
+  # logic + tests live there; this LV just calls the helper.
+  defp notify_remote_async(fun), do: PhoenixKitSync.AsyncTasks.notify_remote_async(fun)
 end

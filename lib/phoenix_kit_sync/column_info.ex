@@ -14,6 +14,9 @@ defmodule PhoenixKitSync.ColumnInfo do
   - `scale` - Numeric scale or nil
   """
 
+  # Sibling of TableSchema — encoded into the schema-response payload
+  # over the WebSocket protocol. Same Jason.Encoder requirement.
+  @derive Jason.Encoder
   @enforce_keys [:name, :type]
   defstruct [
     :name,

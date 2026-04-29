@@ -294,26 +294,38 @@ defmodule PhoenixKitSync.Web.SyncWebsock do
     end
   end
 
-  # Handle records request
+  # Handle records request. The payload comes from the (potentially
+  # malicious) WebSocket peer, so we Map.fetch/2 instead of Map.fetch!/2 —
+  # a missing "table" or "ref" key returns a structured error response
+  # rather than crashing the WebSock process.
   defp handle_message(_join_ref, _ref, _topic, "request:records", payload, state) do
-    if state.joined do
-      table = Map.fetch!(payload, "table")
-      client_ref = Map.fetch!(payload, "ref")
-      offset = Map.get(payload, "offset", 0)
-      limit = Map.get(payload, "limit", 100)
+    cond do
+      not state.joined ->
+        {:ok, state}
 
-      # Apply connection's max_records_per_request limit
-      effective_limit = get_effective_limit(limit, state)
+      not is_binary(payload["table"]) or not is_binary(payload["ref"]) ->
+        Logger.warning(
+          "Sync.Websock: request:records missing/invalid required fields | payload=#{inspect(payload, limit: 5)}"
+        )
 
-      Logger.debug(
-        "Sync.Websock: Records requested for #{table} (offset: #{offset}, limit: #{effective_limit})"
-      )
+        {:ok, state}
 
-      response = fetch_and_respond_records(table, offset, effective_limit, client_ref, state)
+      true ->
+        table = payload["table"]
+        client_ref = payload["ref"]
+        offset = Map.get(payload, "offset", 0)
+        limit = Map.get(payload, "limit", 100)
 
-      {:push, {:text, response}, state}
-    else
-      {:ok, state}
+        # Apply connection's max_records_per_request limit
+        effective_limit = get_effective_limit(limit, state)
+
+        Logger.debug(
+          "Sync.Websock: Records requested for #{table} (offset: #{offset}, limit: #{effective_limit})"
+        )
+
+        response = fetch_and_respond_records(table, offset, effective_limit, client_ref, state)
+
+        {:push, {:text, response}, state}
     end
   end
 

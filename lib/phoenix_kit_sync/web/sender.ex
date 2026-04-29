@@ -37,7 +37,10 @@ defmodule PhoenixKitSync.Web.Sender do
       |> assign(:site_url, site_url)
       |> assign(:step, :generate_code)
       |> assign(:session, nil)
-      # Multiple receivers support - map of pid => receiver_data
+      # Multiple receivers support - map of channel_pid => receiver_data.
+      # Each receiver_data carries a stable :token (UUIDv7) used in the rendered
+      # HTML instead of the raw PID, so untrusted client input never gets
+      # converted back into a BEAM PID.
       |> assign(:receivers, %{})
       |> assign(:connection_status, nil)
 
@@ -75,7 +78,12 @@ defmodule PhoenixKitSync.Web.Sender do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to generate code: #{inspect(reason)}")}
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Failed to generate code: %{reason}", reason: inspect(reason))
+         )}
     end
   end
 
@@ -95,7 +103,12 @@ defmodule PhoenixKitSync.Web.Sender do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to generate code: #{inspect(reason)}")}
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Failed to generate code: %{reason}", reason: inspect(reason))
+         )}
     end
   end
 
@@ -131,25 +144,24 @@ defmodule PhoenixKitSync.Web.Sender do
   end
 
   @impl true
-  def handle_event("disconnect_receiver", %{"pid" => pid_string}, socket) do
-    # Find and remove the receiver by PID string
-    pid = string_to_pid(pid_string)
+  def handle_event("disconnect_receiver", %{"token" => token}, socket) when is_binary(token) do
+    case find_receiver_by_token(socket.assigns.receivers, token) do
+      {pid, _data} ->
+        receivers = Map.delete(socket.assigns.receivers, pid)
 
-    if pid && Map.has_key?(socket.assigns.receivers, pid) do
-      # The channel will terminate when process exits, but we can also
-      # remove it from our tracking immediately
-      receivers = Map.delete(socket.assigns.receivers, pid)
+        socket =
+          socket
+          |> assign(:receivers, receivers)
+          |> maybe_update_step_for_receivers()
 
-      socket =
-        socket
-        |> assign(:receivers, receivers)
-        |> maybe_update_step_for_receivers()
+        {:noreply, put_flash(socket, :info, gettext("Receiver disconnected"))}
 
-      {:noreply, put_flash(socket, :info, "Receiver disconnected")}
-    else
-      {:noreply, socket}
+      nil ->
+        {:noreply, socket}
     end
   end
+
+  def handle_event("disconnect_receiver", _params, socket), do: {:noreply, socket}
 
   # ===========================================
   # MESSAGE HANDLERS (from Channel)
@@ -169,6 +181,7 @@ defmodule PhoenixKitSync.Web.Sender do
 
     # Add this receiver to our map
     receiver_data = %{
+      token: UUIDv7.generate(),
       receiver_info: receiver_info,
       connection_info: connection_info,
       connected_at: UtilsDate.utc_now()
@@ -191,6 +204,7 @@ defmodule PhoenixKitSync.Web.Sender do
     Logger.info("Sync.Sender: Receiver connected (no info)")
 
     receiver_data = %{
+      token: UUIDv7.generate(),
       receiver_info: %{},
       connection_info: %{},
       connected_at: UtilsDate.utc_now()
@@ -217,7 +231,7 @@ defmodule PhoenixKitSync.Web.Sender do
       socket
       |> assign(:receivers, receivers)
       |> maybe_update_step_for_receivers()
-      |> put_flash(:info, "A receiver disconnected")
+      |> put_flash(:info, gettext("A receiver disconnected"))
 
     {:noreply, socket}
   end
@@ -229,7 +243,7 @@ defmodule PhoenixKitSync.Web.Sender do
 
     # For old format, we don't know which receiver, so just flash a message
     # The channel terminate will send the new format with PID
-    socket = put_flash(socket, :info, "A receiver disconnected")
+    socket = put_flash(socket, :info, gettext("A receiver disconnected"))
 
     {:noreply, socket}
   end
@@ -241,7 +255,8 @@ defmodule PhoenixKitSync.Web.Sender do
   end
 
   @impl true
-  def handle_info(_msg, socket) do
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.Sender] unhandled message | msg=#{inspect(msg)}")
     {:noreply, socket}
   end
 
@@ -296,8 +311,12 @@ defmodule PhoenixKitSync.Web.Sender do
           Click the button below to generate a connection code. Share this code and your site URL
           with the site that wants to receive your data.
         </p>
-        <button phx-click="generate_code" class="btn btn-primary btn-lg">
-          <.icon name="hero-key" class="w-5 h-5" /> Generate Connection Code
+        <button
+          phx-click="generate_code"
+          phx-disable-with={gettext("Generating…")}
+          class="btn btn-primary btn-lg"
+        >
+          <.icon name="hero-key" class="w-5 h-5" /> {gettext("Generate Connection Code")}
         </button>
       </div>
     </div>
@@ -368,8 +387,12 @@ defmodule PhoenixKitSync.Web.Sender do
 
         <%!-- Actions --%>
         <div class="flex gap-4 justify-center">
-          <button phx-click="regenerate_code" class="btn btn-outline btn-sm">
-            <.icon name="hero-arrow-path" class="w-4 h-4" /> New Code
+          <button
+            phx-click="regenerate_code"
+            phx-disable-with={gettext("Regenerating…")}
+            class="btn btn-outline btn-sm"
+          >
+            <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("New Code")}
           </button>
           <button phx-click="cancel" class="btn btn-ghost btn-sm">
             Cancel
@@ -423,9 +446,8 @@ defmodule PhoenixKitSync.Web.Sender do
       </div>
 
       <%!-- Connected Receivers --%>
-      <%= for {pid, receiver_data} <- @receivers do %>
+      <%= for {_pid, receiver_data} <- @receivers do %>
         <.render_receiver_card
-          pid={pid}
           receiver_data={receiver_data}
           show_disconnect={@receiver_count > 0}
         />
@@ -446,8 +468,12 @@ defmodule PhoenixKitSync.Web.Sender do
           </div>
 
           <div class="flex justify-center mt-4">
-            <button phx-click="disconnect" class="btn btn-outline btn-error">
-              <.icon name="hero-x-mark" class="w-5 h-5" /> End All Sessions
+            <button
+              phx-click="disconnect"
+              phx-disable-with={gettext("Disconnecting…")}
+              class="btn btn-outline btn-error"
+            >
+              <.icon name="hero-x-mark" class="w-5 h-5" /> {gettext("End All Sessions")}
             </button>
           </div>
         </div>
@@ -456,7 +482,6 @@ defmodule PhoenixKitSync.Web.Sender do
     """
   end
 
-  attr :pid, :any, required: true
   attr :receiver_data, :map, required: true
   attr :show_disconnect, :boolean, default: true
 
@@ -492,9 +517,10 @@ defmodule PhoenixKitSync.Web.Sender do
           <%= if @show_disconnect do %>
             <button
               phx-click="disconnect_receiver"
-              phx-value-pid={pid_to_string(@pid)}
+              phx-value-token={@receiver_data.token}
+              phx-disable-with={gettext("Disconnecting…")}
               class="btn btn-ghost btn-sm text-error"
-              title="Disconnect this receiver"
+              title={gettext("Disconnect this receiver")}
             >
               <.icon name="hero-x-mark" class="w-4 h-4" />
             </button>
@@ -626,20 +652,7 @@ defmodule PhoenixKitSync.Web.Sender do
     end
   end
 
-  # Convert PID string back to PID (for disconnect button)
-  defp string_to_pid(pid_string) when is_binary(pid_string) do
-    # PID string looks like "#PID<0.123.0>" - extract the numbers
-    case Regex.run(~r/<(.+)>/, pid_string) do
-      [_, pid_part] -> :erlang.list_to_pid(~c"<#{pid_part}>")
-      _ -> nil
-    end
-  rescue
-    _ -> nil
+  defp find_receiver_by_token(receivers, token) when is_binary(token) do
+    Enum.find(receivers, fn {_pid, data} -> Map.get(data, :token) == token end)
   end
-
-  defp string_to_pid(_), do: nil
-
-  # Convert PID to string for use in HTML attributes
-  defp pid_to_string(pid) when is_pid(pid), do: inspect(pid)
-  defp pid_to_string(_), do: ""
 end

@@ -257,4 +257,135 @@ defmodule PhoenixKitSync.Integration.DataImporterTest do
       assert results["sync_test_import_extra"].created == 2
     end
   end
+
+  describe "batched find_existing (N+1 fix)" do
+    # Regression pin for the pre-fetch optimisation. Before this change,
+    # a batch of N records with a :skip strategy ran N SELECTs before any
+    # INSERT. The pre-fetch collapses those into one SELECT …
+    # WHERE "pk" = ANY($1). Correctness-wise, the observable behavior is
+    # identical — this test asserts that identical observable behavior on
+    # a mixed batch of new + existing records.
+    test "correctly splits a mixed batch into created + skipped" do
+      # Seed three rows. Their ids are serial; fetch them back.
+      seed = [
+        %{"name" => "Existing 1", "email" => "e1@x.io", "age" => 10},
+        %{"name" => "Existing 2", "email" => "e2@x.io", "age" => 20},
+        %{"name" => "Existing 3", "email" => "e3@x.io", "age" => 30}
+      ]
+
+      assert {:ok, %{created: 3}} = DataImporter.import_records(@test_table, seed, :skip)
+      assert count_rows() == 3
+
+      [r1, r2, r3] = fetch_all_rows()
+
+      # Mixed batch: three records that collide with existing PKs (should
+      # skip) plus two with fresh PKs (should insert). The pre-fetch path
+      # resolves all five lookups in one query.
+      batch = [
+        %{"id" => r1["id"], "name" => "Updated 1", "email" => "u1@x.io", "age" => 11},
+        %{"id" => r2["id"], "name" => "Updated 2", "email" => "u2@x.io", "age" => 22},
+        %{"id" => r3["id"], "name" => "Updated 3", "email" => "u3@x.io", "age" => 33},
+        %{"name" => "New A", "email" => "new-a@x.io", "age" => 40},
+        %{"name" => "New B", "email" => "new-b@x.io", "age" => 50}
+      ]
+
+      assert {:ok, result} = DataImporter.import_records(@test_table, batch, :skip)
+      assert result.created == 2
+      assert result.skipped == 3
+      assert result.updated == 0
+      assert result.errors == []
+      assert count_rows() == 5
+
+      # Existing rows untouched — the :skip strategy preserved them.
+      names = fetch_all_rows() |> Enum.map(& &1["name"]) |> Enum.sort()
+      assert names == ["Existing 1", "Existing 2", "Existing 3", "New A", "New B"]
+    end
+
+    test "overwrite strategy correctly updates all matched records in batch" do
+      # Seed + update all three via :overwrite. Pre-fetch resolves all
+      # three lookups in one query; per-record UPDATE still happens.
+      seed = [
+        %{"name" => "Before 1", "email" => "b1@x.io", "age" => 1},
+        %{"name" => "Before 2", "email" => "b2@x.io", "age" => 2}
+      ]
+
+      assert {:ok, %{created: 2}} = DataImporter.import_records(@test_table, seed, :skip)
+      [r1, r2] = fetch_all_rows()
+
+      batch = [
+        %{"id" => r1["id"], "name" => "After 1", "email" => "a1@x.io", "age" => 100},
+        %{"id" => r2["id"], "name" => "After 2", "email" => "a2@x.io", "age" => 200}
+      ]
+
+      assert {:ok, result} = DataImporter.import_records(@test_table, batch, :overwrite)
+      assert result.updated == 2
+      assert result.created == 0
+      assert count_rows() == 2
+
+      names = fetch_all_rows() |> Enum.map(& &1["name"]) |> Enum.sort()
+      assert names == ["After 1", "After 2"]
+    end
+
+    test ":append strategy skips the pre-fetch entirely (no PK conflict check)" do
+      # Append should create new rows regardless of existing PKs. The
+      # prefetch_existing guard returns an empty map for :append.
+      seed = [%{"name" => "Seed", "email" => "seed@x.io", "age" => 1}]
+      assert {:ok, %{created: 1}} = DataImporter.import_records(@test_table, seed, :skip)
+      [r1] = fetch_all_rows()
+
+      # A record whose explicit id collides with the seed — :append strips
+      # the PK before insert, so the DB assigns a fresh serial id.
+      batch = [
+        %{"id" => r1["id"], "name" => "Appended", "email" => "app@x.io", "age" => 99}
+      ]
+
+      assert {:ok, %{created: 1}} = DataImporter.import_records(@test_table, batch, :append)
+      assert count_rows() == 2
+
+      names = fetch_all_rows() |> Enum.map(& &1["name"]) |> Enum.sort()
+      assert names == ["Appended", "Seed"]
+    end
+  end
+
+  describe "identifier validation (SQL injection guard)" do
+    test "rejects table names with SQL metacharacters" do
+      records = [%{"name" => "Alice", "email" => "a@x.io", "age" => 1}]
+
+      # Baseline: a known-good table inserts cleanly.
+      assert {:ok, %{created: 1}} = DataImporter.import_records(@test_table, records, :skip)
+
+      # Classic injection payloads — semicolon-drop, quote-break, comment,
+      # tautology. Every one must be rejected before any SQL is executed
+      # against the target table. Rejection surfaces as a plain `{:error, _}`
+      # from SchemaInspector.get_schema/1, which runs *before* DataImporter's
+      # internal SQL builder sees the identifier. That's defense in depth:
+      # even if a caller bypassed get_schema, DataImporter's own
+      # valid_identifier? guard would refuse the query.
+      for bad_table <- [
+            "#{@test_table}; DROP TABLE #{@test_table}; --",
+            "#{@test_table}'--",
+            "#{@test_table} OR 1=1",
+            "#{@test_table}\"; DELETE FROM #{@test_table}; --"
+          ] do
+        assert {:error, _reason} = DataImporter.import_records(bad_table, records, :skip)
+      end
+
+      # The original row survived every attempted injection.
+      assert count_rows() == 1
+    end
+
+    test "rejects column names with SQL metacharacters" do
+      # A record with a weaponised column name — note that SchemaInspector's
+      # get_schema only validates the table, so this payload *does* reach
+      # DataImporter's internal SQL path. The column-level identifier check
+      # stops the insert there: nothing lands in the DB, and the error is
+      # accumulated per-record rather than crashing the whole batch.
+      bad_record = [%{"name\"; DROP TABLE x; --" => "hacked"}]
+
+      assert {:ok, result} = DataImporter.import_records(@test_table, bad_record, :skip)
+      assert result.created == 0
+      assert result.errors != []
+      assert count_rows() == 0
+    end
+  end
 end

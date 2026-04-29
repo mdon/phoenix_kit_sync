@@ -41,6 +41,13 @@ repo_available =
       # Enable uuid-ossp extension
       TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
 
+      # Enable pgcrypto — uuid_generate_v7() depends on `gen_random_bytes`,
+      # which lives in pgcrypto. On a fresh `createdb` without it, the
+      # CREATE FUNCTION below succeeds but every insert that defaults to
+      # uuid_generate_v7() fails with "function gen_random_bytes does not
+      # exist". See workspace AGENTS.md flaky-test traps.
+      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+
       # Create uuid_generate_v7() function (normally created by PhoenixKit V40 migration)
       TestRepo.query!("""
       CREATE OR REPLACE FUNCTION uuid_generate_v7()
@@ -60,6 +67,47 @@ repo_available =
 
       # Run sync migration to create tables via Ecto.Migrator
       Ecto.Migrator.up(TestRepo, 0, PhoenixKitSync.Migration, log: false)
+
+      # Create a minimal phoenix_kit_activities table so
+      # PhoenixKit.Activity.log/1 calls from Connections mutations succeed
+      # without polluting test output with "relation does not exist"
+      # warnings. Shape matches the real schema that core phoenix_kit
+      # migrations build (uuid PK via uuid_generate_v7, JSONB metadata,
+      # timestamps). Without this, every mutation in the suite logged a
+      # warning even though the operation itself succeeded.
+      TestRepo.query!("""
+      CREATE TABLE IF NOT EXISTS phoenix_kit_activities (
+        uuid uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
+        action varchar(255) NOT NULL,
+        module varchar(100),
+        mode varchar(50),
+        actor_uuid uuid,
+        resource_type varchar(100),
+        resource_uuid uuid,
+        target_uuid uuid,
+        metadata jsonb DEFAULT '{}'::jsonb,
+        inserted_at timestamp without time zone DEFAULT NOW()
+      )
+      """)
+
+      # Create phoenix_kit_settings with the REAL schema columns. LiveView
+      # mounts read `PhoenixKit.Settings.get_project_title/0` which queries
+      # this table; without it, every LV test crashes before render.
+      # Column shape is load-bearing: a mismatch ("column module does not
+      # exist") aborts the sandbox transaction — every subsequent query
+      # in the same test fails with "current transaction is aborted".
+      # See agents.md:664-673.
+      TestRepo.query!("""
+      CREATE TABLE IF NOT EXISTS phoenix_kit_settings (
+        uuid uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
+        key varchar(255) NOT NULL UNIQUE,
+        value text,
+        value_json jsonb,
+        module varchar(100),
+        date_added timestamp without time zone DEFAULT NOW(),
+        date_updated timestamp without time zone DEFAULT NOW()
+      )
+      """)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
@@ -89,6 +137,52 @@ Application.put_env(:phoenix_kit_sync, :test_repo_available, repo_available)
 # Start minimal services needed for tests
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
+
+# Start PhoenixKit.TaskSupervisor so PhoenixKitSync.AsyncTasks can route
+# fire-and-forget tasks through the named supervisor as it does in
+# production. Without this, the helper's `:exit` fallback fires and tests
+# can't distinguish supervised from bare `Task.start`.
+case Task.Supervisor.start_link(name: PhoenixKit.TaskSupervisor) do
+  {:ok, _pid} -> :ok
+  {:error, {:already_started, _pid}} -> :ok
+end
+
+# Start SessionStore so PhoenixKitSync.create_session/2 +
+# PhoenixKitSync.validate_code/1 work in tests. The store is a
+# GenServer that owns an ETS table; without it any code-based session
+# operation crashes with "the table identifier does not refer to an
+# existing ETS table".
+case PhoenixKitSync.SessionStore.start_link([]) do
+  {:ok, _pid} -> :ok
+  {:error, {:already_started, _pid}} -> :ok
+end
+
+# Start the test endpoint so Phoenix.LiveViewTest.live/2 can drive
+# LiveViews through `/en/admin/sync/*` URLs. Only when the DB is
+# available (otherwise integration tests are excluded anyway).
+if repo_available do
+  # PubSub server for the test endpoint — required by Phoenix.Socket
+  # initialisation in Phoenix.ChannelTest.
+  {:ok, _} = Phoenix.PubSub.Supervisor.start_link(name: PhoenixKitSync.Test.PubSub)
+
+  # Finch instance ConnectionNotifier reaches for via get_finch_name/0.
+  # Required by tests that drive HTTP cross-site flows.
+  {:ok, _} = Finch.start_link(name: PhoenixKit.Finch)
+
+  {:ok, _pid} = PhoenixKitSync.Test.Endpoint.start_link()
+
+  # Read the actual port the test endpoint bound to so test code can
+  # build localhost URLs that ConnectionNotifier / WebSocketClient
+  # actually reach. Phoenix.Endpoint.server_info/2 reports the bound
+  # address tuple after Bandit has registered its listener.
+  {:ok, {_addr, test_port}} = PhoenixKitSync.Test.Endpoint.server_info(:http)
+  Application.put_env(:phoenix_kit_sync, :test_endpoint_port, test_port)
+
+  # Pin URL prefix to "" via :persistent_term so PhoenixKit.Utils.Routes
+  # doesn't try to query the settings table for the live URL prefix
+  # during test mounts (which would be a cross-process sandbox query).
+  :persistent_term.put({PhoenixKit.Config, :url_prefix}, "")
+end
 
 # Exclude integration tests when DB is not available
 exclude = if repo_available, do: [], else: [:integration]

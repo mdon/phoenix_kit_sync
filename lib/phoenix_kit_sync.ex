@@ -105,6 +105,12 @@ defmodule PhoenixKitSync do
     Settings.get_boolean_setting(@enabled_key, false)
   rescue
     _ -> false
+  catch
+    # Sandbox owner exit during a non-DataCase test run surfaces as
+    # `:exit` rather than a rescuable exception — without this clause
+    # the next test that touches `enabled?/0` flakes ~1-in-10. See
+    # workspace AGENTS.md flaky-test traps.
+    :exit, _ -> false
   end
 
   @impl PhoenixKit.Module
@@ -300,8 +306,14 @@ defmodule PhoenixKitSync do
   @spec validate_incoming_password(String.t() | nil) :: boolean()
   def validate_incoming_password(provided_password) do
     case get_incoming_password() do
-      nil -> true
-      stored_password -> stored_password == provided_password
+      nil ->
+        true
+
+      stored_password when is_binary(stored_password) and is_binary(provided_password) ->
+        Plug.Crypto.secure_compare(provided_password, stored_password)
+
+      _ ->
+        false
     end
   end
 

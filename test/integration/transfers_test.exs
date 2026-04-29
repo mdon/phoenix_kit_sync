@@ -1,5 +1,7 @@
 defmodule PhoenixKitSync.Integration.TransfersTest do
-  use PhoenixKitSync.DataCase, async: true
+  use PhoenixKitSync.DataCase, async: false
+
+  import PhoenixKitSync.ActivityLogAssertions
 
   alias PhoenixKitSync.Connections
   alias PhoenixKitSync.Transfers
@@ -182,6 +184,111 @@ defmodule PhoenixKitSync.Integration.TransfersTest do
 
       stats = Transfers.connection_stats(conn.uuid)
       assert is_map(stats)
+    end
+  end
+
+  describe "activity logging" do
+    test "create_transfer logs sync.transfer.created" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_users",
+          "connection_uuid" => conn.uuid
+        })
+
+      assert_activity_logged("sync.transfer.created",
+        resource_uuid: transfer.uuid,
+        metadata_has: %{"table_name" => "act_users", "direction" => "send"}
+      )
+    end
+
+    test "complete_transfer logs sync.transfer.completed" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_done",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, started} = Transfers.start_transfer(transfer)
+
+      {:ok, _} =
+        Transfers.complete_transfer(started, %{records_transferred: 7, bytes_transferred: 1_024})
+
+      assert_activity_logged("sync.transfer.completed",
+        resource_uuid: transfer.uuid,
+        metadata_has: %{"status" => "completed"}
+      )
+    end
+
+    test "fail_transfer logs sync.transfer.failed" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_failed",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, started} = Transfers.start_transfer(transfer)
+      {:ok, _} = Transfers.fail_transfer(started, "test failure reason")
+
+      assert_activity_logged("sync.transfer.failed",
+        resource_uuid: transfer.uuid,
+        metadata_has: %{"status" => "failed"}
+      )
+    end
+
+    test "approve_transfer logs sync.transfer.approved with actor_uuid" do
+      conn = create_connection()
+      admin_uuid = UUIDv7.generate()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "act_approve",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, _} = Transfers.request_approval(transfer)
+      transfer = Transfers.get_transfer!(transfer.uuid)
+
+      {:ok, _} = Transfers.approve_transfer(transfer, admin_uuid)
+
+      assert_activity_logged("sync.transfer.approved",
+        resource_uuid: transfer.uuid,
+        actor_uuid: admin_uuid
+      )
+    end
+  end
+
+  describe "update_progress/2 (high-frequency, intentionally not activity-logged)" do
+    test "updates progress fields without writing an activity row" do
+      conn = create_connection()
+
+      {:ok, transfer} =
+        Transfers.create_transfer(%{
+          "direction" => "send",
+          "table_name" => "progress_pin_table",
+          "connection_uuid" => conn.uuid
+        })
+
+      {:ok, started} = Transfers.start_transfer(transfer)
+
+      {:ok, updated} =
+        Transfers.update_progress(started, %{records_transferred: 100, bytes_transferred: 4_096})
+
+      assert updated.records_transferred == 100
+      assert updated.bytes_transferred == 4_096
+
+      # No activity row for progress updates — the per-batch
+      # Transfers.create_transfer audit row already covers each batch.
+      refute_activity_logged("sync.transfer.progress_updated", resource_uuid: transfer.uuid)
     end
   end
 end

@@ -47,6 +47,8 @@ defmodule PhoenixKitSync.Connections do
 
   import Ecto.Query, warn: false
 
+  use Gettext, backend: PhoenixKitWeb.Gettext
+
   require Logger
 
   alias PhoenixKit.RepoHelper
@@ -59,10 +61,59 @@ defmodule PhoenixKitSync.Connections do
   # PUBSUB BROADCASTING
   # ===========================================
 
+  # Best-effort audit trail. Calls core PhoenixKit.Activity.log/1 with a
+  # standardised action string ("sync.connection.<verb>") and the safe
+  # subset of connection fields that aren't PII (name, direction, status
+  # — NOT the site_url, which may leak internal hostnames to the audit
+  # log). Guarded so the module keeps working if PhoenixKit.Activity is
+  # stripped or the activities table is missing during tests, and rescued
+  # so a logging failure never crashes the primary operation.
+  defp log_sync_activity(action, %Connection{} = connection, opts, extra_metadata \\ %{}) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      try do
+        metadata =
+          %{
+            "connection_name" => connection.name,
+            "direction" => connection.direction,
+            "status" => connection.status
+          }
+          |> Map.merge(extra_metadata)
+
+        PhoenixKit.Activity.log(%{
+          action: "sync.connection.#{action}",
+          module: "sync",
+          mode: "manual",
+          actor_uuid: Keyword.get(opts, :actor_uuid),
+          resource_type: "sync_connection",
+          resource_uuid: connection.uuid,
+          metadata: metadata
+        })
+      rescue
+        # Activity table might not exist in a minimal test setup; don't
+        # let an audit-log failure propagate into the caller's result.
+        _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  PubSub topic that `Connections` broadcasts on for connection lifecycle
+  events (`:connection_created`, `:connection_updated`,
+  `:connection_status_changed`, `:connection_deleted`).
+
+  Subscribers should reference this constant rather than the literal
+  string so the topic name stays consistent across broadcast and
+  subscribe sites.
+  """
+  @spec pubsub_topic() :: String.t()
+  def pubsub_topic, do: "sync:connections"
+
   defp broadcast(event) do
     case PhoenixKit.Config.pubsub_server() do
       nil -> :ok
-      pubsub -> Phoenix.PubSub.broadcast(pubsub, "sync:connections", event)
+      pubsub -> Phoenix.PubSub.broadcast(pubsub, pubsub_topic(), event)
     end
   end
 
@@ -94,8 +145,7 @@ defmodule PhoenixKitSync.Connections do
         created_by_uuid: current_user.uuid
       })
 
-      # Token is only returned once - store it securely!
-      IO.puts("Auth token: \#{token}")
+      # Token is only returned once — store it securely.
   """
   @spec create_connection(map()) ::
           {:ok, Connection.t(), String.t()} | {:error, Ecto.Changeset.t()}
@@ -120,7 +170,8 @@ defmodule PhoenixKitSync.Connections do
     changeset =
       %Connection{}
       |> Connection.changeset(attrs)
-      |> Ecto.Changeset.add_error(:site_url, "cannot create a connection to yourself")
+      |> Ecto.Changeset.add_error(:site_url, gettext("cannot create a connection to yourself"))
+      |> Map.put(:action, :insert)
 
     {:error, changeset}
   end
@@ -144,6 +195,7 @@ defmodule PhoenixKitSync.Connections do
             "| status=#{connection.status}"
         )
 
+        log_sync_activity("created", connection, [])
         broadcast({:connection_created, connection.uuid})
         {:ok, connection, token}
 
@@ -202,7 +254,7 @@ defmodule PhoenixKitSync.Connections do
   Accepts:
   - UUID string: `get_connection("01234567-89ab-cdef-0123-456789abcdef")`
   """
-  @spec get_connection(String.t()) :: Connection.t() | nil
+  @spec get_connection(String.t() | any()) :: Connection.t() | nil
   def get_connection(id) when is_binary(id) do
     repo = RepoHelper.repo()
 
@@ -285,34 +337,22 @@ defmodule PhoenixKitSync.Connections do
         max_downloads: 100
       })
   """
-  @spec update_connection(Connection.t(), map()) ::
+  @spec update_connection(Connection.t(), map(), keyword()) ::
           {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
-  def update_connection(%Connection{} = connection, attrs) do
+  def update_connection(%Connection{} = connection, attrs, opts \\ []) do
     repo = RepoHelper.repo()
+    changed_fields = detect_changed_fields(connection, attrs)
 
     connection
     |> Connection.settings_changeset(attrs)
     |> repo.update()
     |> tap(fn
       {:ok, updated} ->
-        changed_fields =
-          attrs
-          |> Enum.reject(fn {k, v} -> Map.get(connection, k) == v end)
-          |> Enum.map(fn {k, _v} -> k end)
+        broadcast_connection_update(connection, updated, changed_fields)
 
-        if changed_fields != [] do
-          Logger.info(
-            "[Sync.Connections] Connection updated " <>
-              "| uuid=#{updated.uuid} " <>
-              "| changed=#{inspect(changed_fields)}"
-          )
-        end
-
-        if :status in changed_fields or "status" in changed_fields do
-          broadcast({:connection_status_changed, updated.uuid, updated.status})
-        else
-          broadcast({:connection_updated, updated.uuid})
-        end
+        log_sync_activity("updated", updated, opts, %{
+          "changed_fields" => Enum.map(changed_fields, &to_string/1)
+        })
 
       {:error, changeset} ->
         Logger.warning(
@@ -320,8 +360,64 @@ defmodule PhoenixKitSync.Connections do
             "| uuid=#{connection.uuid} " <>
             "| errors=#{inspect(changeset.errors)}"
         )
+
+        log_sync_activity("updated", connection, opts, %{
+          "changed_fields" => Enum.map(changed_fields, &to_string/1),
+          "db_pending" => true
+        })
     end)
   end
+
+  # No changed fields = no-op save. Skip the log line AND the PubSub
+  # broadcast; subscribers don't need to re-render their view of something
+  # that didn't move. Pre-fix this branch was unreachable because string-
+  # keyed attrs always looked "changed" via Map.get-returns-nil.
+  defp broadcast_connection_update(_connection, _updated, []), do: :ok
+
+  defp broadcast_connection_update(_connection, updated, changed_fields) do
+    Logger.info(
+      "[Sync.Connections] Connection updated " <>
+        "| uuid=#{updated.uuid} " <>
+        "| changed=#{inspect(changed_fields)}"
+    )
+
+    if :status in changed_fields or "status" in changed_fields do
+      broadcast({:connection_status_changed, updated.uuid, updated.status})
+    else
+      broadcast({:connection_updated, updated.uuid})
+    end
+  end
+
+  # Returns the subset of `attrs` whose values differ from the struct. Works
+  # for both atom-keyed (internal) and string-keyed (LiveView form) attrs:
+  # string keys are resolved against the struct via `String.to_existing_atom`
+  # so a typoed or unknown key doesn't crash and isn't falsely flagged as
+  # "changed". Without this, a form submit with `%{"status" => "active"}`
+  # against a struct's atom-keyed `:status` would make every field look
+  # changed (because `Map.get(struct, "status")` is always `nil`) and fire a
+  # misleading `:connection_updated` broadcast.
+  defp detect_changed_fields(%Connection{} = connection, attrs) do
+    Enum.reduce(attrs, [], fn {k, v}, acc ->
+      field = resolve_struct_key(k)
+
+      cond do
+        is_nil(field) -> acc
+        Map.get(connection, field) == v -> acc
+        true -> [k | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp resolve_struct_key(k) when is_atom(k), do: k
+
+  defp resolve_struct_key(k) when is_binary(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp resolve_struct_key(_), do: nil
 
   @doc """
   Deletes a connection.
@@ -331,7 +427,7 @@ defmodule PhoenixKitSync.Connections do
       {:ok, conn} = Connections.delete_connection(conn)
   """
   @spec delete_connection(Connection.t()) :: {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
-  def delete_connection(%Connection{} = connection) do
+  def delete_connection(%Connection{} = connection, opts \\ []) do
     Logger.info(
       "[Sync.Connections] Deleting connection " <>
         "| uuid=#{connection.uuid} " <>
@@ -343,10 +439,12 @@ defmodule PhoenixKitSync.Connections do
 
     case repo.delete(connection) do
       {:ok, deleted} ->
+        log_sync_activity("deleted", deleted, opts)
         broadcast({:connection_deleted, deleted.uuid})
         {:ok, deleted}
 
       error ->
+        log_sync_activity("deleted", connection, opts, %{"db_pending" => true})
         error
     end
   end
@@ -380,10 +478,15 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.approve_changeset(admin_user_uuid) |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("approved", updated, actor_uuid: admin_user_uuid)
         broadcast({:connection_status_changed, updated.uuid, "active"})
         {:ok, updated}
 
       error ->
+        log_sync_activity("approved", connection, [actor_uuid: admin_user_uuid], %{
+          "db_pending" => true
+        })
+
         error
     end
   end
@@ -415,10 +518,19 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.suspend_changeset(admin_user_uuid, reason) |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("suspended", updated, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason
+        })
+
         broadcast({:connection_status_changed, updated.uuid, "suspended"})
         {:ok, updated}
 
       error ->
+        log_sync_activity("suspended", connection, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason,
+          "db_pending" => true
+        })
+
         error
     end
   end
@@ -450,10 +562,19 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.revoke_changeset(admin_user_uuid, reason) |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("revoked", updated, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason
+        })
+
         broadcast({:connection_status_changed, updated.uuid, "revoked"})
         {:ok, updated}
 
       error ->
+        log_sync_activity("revoked", connection, [actor_uuid: admin_user_uuid], %{
+          "reason" => reason,
+          "db_pending" => true
+        })
+
         error
     end
   end
@@ -465,9 +586,9 @@ defmodule PhoenixKitSync.Connections do
 
       {:ok, conn} = Connections.reactivate_connection(conn)
   """
-  @spec reactivate_connection(Connection.t()) ::
+  @spec reactivate_connection(Connection.t(), keyword()) ::
           {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
-  def reactivate_connection(%Connection{} = connection) do
+  def reactivate_connection(%Connection{} = connection, opts \\ []) do
     Logger.info(
       "[Sync.Connections] Reactivating connection " <>
         "| uuid=#{connection.uuid}"
@@ -477,10 +598,12 @@ defmodule PhoenixKitSync.Connections do
 
     case connection |> Connection.reactivate_changeset() |> repo.update() do
       {:ok, updated} ->
+        log_sync_activity("reactivated", updated, opts)
         broadcast({:connection_status_changed, updated.uuid, "active"})
         {:ok, updated}
 
       error ->
+        log_sync_activity("reactivated", connection, opts, %{"db_pending" => true})
         error
     end
   end
@@ -668,6 +791,14 @@ defmodule PhoenixKitSync.Connections do
         bytes_count: 250000
       })
   """
+  # NOTE: deliberately not activity-logged. record_transfer/2 fires once
+  # per sync batch (potentially many times in a single transfer) and is a
+  # pure stats-counter update. The Transfers context already creates a
+  # `sync_transfer` audit row per batch via Transfers.create_transfer/2,
+  # which carries the same accounting info plus direction/status/timing.
+  # Logging both would flood the activity feed without adding signal.
+  # touch_connected/1 and Transfers.update_progress/2 are excluded for
+  # the same reason.
   @spec record_transfer(Connection.t(), map()) ::
           {:ok, Connection.t()} | {:error, Ecto.Changeset.t()}
   def record_transfer(%Connection{} = connection, attrs) do
@@ -797,7 +928,7 @@ defmodule PhoenixKitSync.Connections do
   ## Examples
 
       {count, nil} = Connections.expire_connections()
-      IO.puts("Expired \#{count} connections")
+      # `count` is the number of connections marked as expired.
   """
   @spec expire_connections() :: {non_neg_integer(), nil | term()}
   def expire_connections do
@@ -853,9 +984,9 @@ defmodule PhoenixKitSync.Connections do
 
       {:ok, conn, new_token} = Connections.regenerate_token(conn)
   """
-  @spec regenerate_token(Connection.t()) ::
+  @spec regenerate_token(Connection.t(), keyword()) ::
           {:ok, Connection.t(), String.t()} | {:error, Ecto.Changeset.t()}
-  def regenerate_token(%Connection{} = connection) do
+  def regenerate_token(%Connection{} = connection, opts \\ []) do
     repo = RepoHelper.repo()
     new_token = Connection.generate_auth_token()
 
@@ -863,8 +994,15 @@ defmodule PhoenixKitSync.Connections do
     |> Connection.changeset(%{auth_token: new_token})
     |> repo.update()
     |> case do
-      {:ok, updated_connection} -> {:ok, updated_connection, new_token}
-      {:error, changeset} -> {:error, changeset}
+      {:ok, updated_connection} ->
+        # Token regeneration is a security-sensitive event — log it. The
+        # raw token never enters metadata; only the fact that a rotation
+        # happened is recorded.
+        log_sync_activity("token_regenerated", updated_connection, opts)
+        {:ok, updated_connection, new_token}
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 

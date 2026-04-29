@@ -53,6 +53,8 @@ When you create a sender connection, the remote site automatically receives a co
 - **Real-Time Progress**: Live tracking of sync operations
 - **Background Import**: Async processing via Oban workers
 - **Cross-Site Protocol**: HTTP API + WebSocket for data transfer
+- **Activity Audit**: Every connection mutation (create, approve, suspend, revoke, reactivate, delete, token rotate) and every transfer mutation (create, complete, fail, cancel, approve, deny) writes a `sync.<resource>.<verb>` row to `phoenix_kit_activities` with the actor's UUID — visible in the core admin Activity feed
+- **Centralised error translation**: Context functions return `{:error, :atom}` tuples; UI / API layers translate via `PhoenixKitSync.Errors.message/1`, which dispatches to gettext-wrapped strings (translations live in core `phoenix_kit`)
 
 ## Connection Settings
 
@@ -126,31 +128,37 @@ When you create a sender connection:
 ```elixir
 alias PhoenixKitSync.Connections
 
-# Create a sender connection
-{:ok, connection} = Connections.create_connection(%{
-  name: "Production Backup",
-  direction: "sender",
-  site_url: "https://backup.example.com",
-  approval_mode: "auto_approve",
-  allowed_tables: ["users", "posts"],
-  max_downloads: 100,
-  created_by_uuid: current_user.uuid
-})
+# Create a sender connection. The raw token is returned in the third
+# tuple element — it's only available at creation time; afterwards only
+# the SHA-256 hash is stored.
+{:ok, connection, token} =
+  Connections.create_connection(%{
+    "name" => "Production Backup",
+    "direction" => "sender",
+    "site_url" => "https://backup.example.com",
+    "approval_mode" => "auto_approve",
+    "allowed_tables" => ["users", "posts"],
+    "max_downloads" => 100,
+    "created_by_uuid" => current_user.uuid
+  })
 
-# The token is returned in connection.auth_token (only on create)
-token = connection.auth_token
-
-# Approve a pending connection
+# Approve a pending connection (admin_user_uuid is recorded as the actor
+# on the resulting `sync.connection.approved` activity-log row).
 {:ok, connection} = Connections.approve_connection(connection, admin_user_uuid)
 
 # Suspend a connection
 {:ok, connection} = Connections.suspend_connection(connection, admin_user_uuid, "Security audit")
 
-# Reactivate a suspended connection
-{:ok, connection} = Connections.reactivate_connection(connection)
+# Reactivate a suspended connection. Pass `actor_uuid:` in opts so the
+# activity log records who reactivated it.
+{:ok, connection} = Connections.reactivate_connection(connection, actor_uuid: admin_user_uuid)
 
 # Revoke permanently
 {:ok, connection} = Connections.revoke_connection(connection, admin_user_uuid, "No longer needed")
+
+# Rotate the auth token (returns the new raw token, hash stored in DB).
+# Logged as `sync.connection.token_regenerated`.
+{:ok, connection, new_token} = Connections.regenerate_token(connection, actor_uuid: admin_user_uuid)
 
 # Validate a token (used by receiver when connecting)
 case Connections.validate_connection(token, client_ip) do
@@ -253,12 +261,14 @@ Connections have fields for auto-sync but the scheduler isn't implemented yet:
 
 ## Security Considerations
 
-- **Token Security**: Tokens are hashed in database, only shown once on creation
-- **Optional Password**: Additional password can be required per-transfer
+- **Token Security**: Tokens are SHA-256 hashed in the database and only shown once on creation; comparisons use `Plug.Crypto.secure_compare/2` to defeat timing attacks
+- **Per-connection table authorization**: Even with a valid token, every API endpoint that returns or accepts table data (`list_tables`, `pull_data`, `table_schema`, `table_records`) filters through the connection's `excluded_tables` blocklist and `allowed_tables` allowlist
+- **Parameterised SQL with identifier validation**: Every dynamic table / column name interpolated into raw SQL passes through `SchemaInspector.valid_identifier?/1` first; values always go through `$N` parameterised binds
+- **Optional Password**: Additional password can be required per-transfer; refuses registration outright when `incoming_mode = "require_password"` but no password is configured (no silent bypass)
 - **IP Whitelisting**: Restrict connections to specific IP addresses
 - **Time Restrictions**: Allow connections only during specific hours
-- **Rate Limiting**: Prevent abuse with request limits
-- **Audit Trail**: Full tracking of who did what and when
+- **Rate Limiting**: Per-connection download / record limits enforced by `Connections.validate_connection/2`
+- **Audit Trail**: Every state-changing operation lands a row in `phoenix_kit_activities` with `actor_uuid`, `resource_type`, `resource_uuid`, and a PII-safe metadata subset (no `site_url`, no `auth_token_hash`)
 
 ## Troubleshooting
 

@@ -8,6 +8,8 @@ defmodule PhoenixKitSync.Web.History do
   use PhoenixKitWeb, :live_view
   use Gettext, backend: PhoenixKitWeb.Gettext
 
+  require Logger
+
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitSync
@@ -33,9 +35,20 @@ defmodule PhoenixKitSync.Web.History do
       |> assign(:status_filter, nil)
       |> assign(:show_approval_modal, false)
       |> assign(:selected_transfer, nil)
-      |> load_transfers()
+      |> maybe_load_transfers()
 
     {:ok, socket}
+  end
+
+  defp maybe_load_transfers(socket) do
+    if connected?(socket), do: load_transfers(socket), else: assign_empty_transfers(socket)
+  end
+
+  defp assign_empty_transfers(socket) do
+    socket
+    |> assign(:transfers, [])
+    |> assign(:total_count, 0)
+    |> assign(:total_pages, 0)
   end
 
   @impl true
@@ -136,7 +149,7 @@ defmodule PhoenixKitSync.Web.History do
       {:ok, _transfer} ->
         socket =
           socket
-          |> put_flash(:info, "Transfer approved successfully")
+          |> put_flash(:info, gettext("Transfer approved successfully"))
           |> assign(:show_approval_modal, false)
           |> assign(:selected_transfer, nil)
           |> load_transfers()
@@ -144,7 +157,7 @@ defmodule PhoenixKitSync.Web.History do
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to approve transfer")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to approve transfer"))}
     end
   end
 
@@ -161,7 +174,7 @@ defmodule PhoenixKitSync.Web.History do
       {:ok, _transfer} ->
         socket =
           socket
-          |> put_flash(:info, "Transfer denied")
+          |> put_flash(:info, gettext("Transfer denied"))
           |> assign(:show_approval_modal, false)
           |> assign(:selected_transfer, nil)
           |> load_transfers()
@@ -169,7 +182,7 @@ defmodule PhoenixKitSync.Web.History do
         {:noreply, socket}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to deny transfer")}
+        {:noreply, put_flash(socket, :error, gettext("Failed to deny transfer"))}
     end
   end
 
@@ -189,6 +202,14 @@ defmodule PhoenixKitSync.Web.History do
     base_path = Routes.path("/admin/sync/history")
     path = base_path <> "?" <> URI.encode_query(query_params)
     {:noreply, push_patch(socket, to: path)}
+  end
+
+  # Catch-all so a stray PubSub message or an internal monitor signal can't
+  # crash the LV. Mirrors the defensive clause on ConnectionsLive.
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[Sync.History] unhandled message | msg=#{inspect(msg)}")
+    {:noreply, socket}
   end
 
   @impl true
@@ -607,25 +628,30 @@ defmodule PhoenixKitSync.Web.History do
                 <input
                   type="text"
                   name="reason"
-                  placeholder="Reason (optional)"
+                  placeholder={gettext("Reason (optional)")}
                   class="input input-bordered input-sm w-48"
                 />
               </div>
-              <button type="submit" class="btn btn-error btn-sm">
-                Deny
+              <button
+                type="submit"
+                class="btn btn-error btn-sm"
+                phx-disable-with={gettext("Denying…")}
+              >
+                {gettext("Deny")}
               </button>
             </form>
             <button
               type="button"
               phx-click="approve_transfer"
               phx-value-uuid={@transfer.uuid}
+              phx-disable-with={gettext("Approving…")}
               class="btn btn-success btn-sm"
             >
-              Approve
+              {gettext("Approve")}
             </button>
           <% else %>
             <button type="button" phx-click="close_approval_modal" class="btn btn-ghost">
-              Close
+              {gettext("Close")}
             </button>
           <% end %>
         </div>

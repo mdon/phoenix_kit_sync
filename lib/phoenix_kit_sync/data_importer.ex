@@ -65,10 +65,25 @@ defmodule PhoenixKitSync.DataImporter do
 
     with {:ok, schema} <- SchemaInspector.get_schema(table),
          primary_keys <- get_primary_keys(schema) do
+      # Single pre-pass: fetch every existing row this batch might conflict
+      # with in one SELECT, keyed by PK value, instead of running one SELECT
+      # per record. For :append there's nothing to look up. Composite PKs
+      # fall back to the empty map and per-record find_existing — the
+      # composite case is rare across phoenix_kit schemas (all use a single
+      # UUIDv7 PK) and would need a row-constructor IN clause to batch.
+      existing_by_pk = prefetch_existing(repo, table, records, primary_keys, strategy)
+
       result =
-        records
-        |> Enum.reduce(%{created: 0, updated: 0, skipped: 0, errors: []}, fn record, acc ->
-          accumulate_import_result(acc, repo, table, record, primary_keys, strategy)
+        Enum.reduce(records, %{created: 0, updated: 0, skipped: 0, errors: []}, fn record, acc ->
+          accumulate_import_result(
+            acc,
+            repo,
+            table,
+            record,
+            primary_keys,
+            strategy,
+            existing_by_pk
+          )
         end)
 
       {:ok, %{result | errors: Enum.reverse(result.errors)}}
@@ -108,8 +123,8 @@ defmodule PhoenixKitSync.DataImporter do
   # Single Record Import
   # ============================================================================
 
-  defp accumulate_import_result(acc, repo, table, record, primary_keys, strategy) do
-    case import_single_record(repo, table, record, primary_keys, strategy) do
+  defp accumulate_import_result(acc, repo, table, record, primary_keys, strategy, existing_by_pk) do
+    case import_single_record(repo, table, record, primary_keys, strategy, existing_by_pk) do
       {:ok, :created} -> %{acc | created: acc.created + 1}
       {:ok, :updated} -> %{acc | updated: acc.updated + 1}
       {:ok, :skipped} -> %{acc | skipped: acc.skipped + 1}
@@ -117,7 +132,7 @@ defmodule PhoenixKitSync.DataImporter do
     end
   end
 
-  defp import_single_record(repo, table, record, primary_keys, :append) do
+  defp import_single_record(repo, table, record, primary_keys, :append, _existing) do
     # For append strategy: strip primary keys and insert as new record
     record = prepare_record(record)
     record_without_pk = Map.drop(record, primary_keys)
@@ -128,21 +143,89 @@ defmodule PhoenixKitSync.DataImporter do
       {:error, Exception.message(e)}
   end
 
-  defp import_single_record(repo, table, record, primary_keys, strategy) do
-    # Prepare the record with proper types
+  defp import_single_record(repo, table, record, primary_keys, strategy, existing_by_pk) do
     record = prepare_record(record)
 
-    case find_existing(repo, table, record, primary_keys) do
-      nil ->
+    # Fast path: lookup in the pre-fetched map. Composite PKs (or any record
+    # whose PKs weren't fetchable) fall through to a per-record
+    # find_existing call so correctness isn't traded for the optimisation.
+    case lookup_existing(record, primary_keys, existing_by_pk) do
+      {:hit, nil} ->
         insert_record(repo, table, record)
 
-      existing ->
+      {:hit, existing} ->
         handle_conflict(repo, table, existing, record, primary_keys, strategy)
+
+      :miss ->
+        case find_existing(repo, table, record, primary_keys) do
+          nil -> insert_record(repo, table, record)
+          existing -> handle_conflict(repo, table, existing, record, primary_keys, strategy)
+        end
     end
   rescue
     e ->
       Logger.warning("DataImporter: Error importing record - #{inspect(e)}")
       {:error, Exception.message(e)}
+  end
+
+  # Batch-fetches every row whose PK matches any record in the incoming
+  # batch, returning `%{pk_value => row}`. Only the single-PK case is
+  # batched — multi-column PKs need a row-constructor IN clause which isn't
+  # worth the complexity until a phoenix_kit table actually uses a
+  # composite PK. Returns an empty map for :append (no conflict check
+  # needed) and for any case that can't safely batch; the caller falls back
+  # to the per-record `find_existing/4` path.
+  defp prefetch_existing(_repo, _table, _records, _primary_keys, :append), do: %{}
+  defp prefetch_existing(_repo, _table, _records, [], _strategy), do: %{}
+  defp prefetch_existing(_repo, _table, _records, [_, _ | _], _strategy), do: %{}
+
+  defp prefetch_existing(repo, table, records, [pk], _strategy) do
+    pk_values = extract_pk_values(records, pk)
+
+    with :ok <- validate_identifiers([table, pk]),
+         false <- pk_values == [] do
+      sql = ~s[SELECT * FROM "#{table}" WHERE "#{pk}" = ANY($1)]
+      run_prefetch_query(repo, sql, pk_values, pk)
+    else
+      _ -> %{}
+    end
+  end
+
+  defp extract_pk_values(records, pk) do
+    records
+    |> Enum.map(fn record ->
+      prepared = prepare_record(record)
+      Map.get(prepared, pk) || Map.get(prepared, safe_atom(pk))
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp run_prefetch_query(repo, sql, pk_values, pk) do
+    case repo.query(sql, [pk_values]) do
+      {:ok, %{rows: rows, columns: columns}} -> index_rows_by_pk(rows, columns, pk)
+      _ -> %{}
+    end
+  end
+
+  defp index_rows_by_pk(rows, columns, pk) do
+    Map.new(rows, fn row ->
+      row_map = Enum.zip(columns, row) |> Map.new()
+      {Map.get(row_map, pk), row_map}
+    end)
+  end
+
+  # Returns {:hit, existing_or_nil} when the prefetch covers this record
+  # (single-PK case with a resolvable PK value), or :miss when the caller
+  # should fall back to find_existing/4 (composite PK or missing PK value).
+  defp lookup_existing(_record, [], _existing_by_pk), do: :miss
+  defp lookup_existing(_record, [_, _ | _], _existing_by_pk), do: :miss
+
+  defp lookup_existing(record, [pk], existing_by_pk) do
+    case Map.get(record, pk) || Map.get(record, safe_atom(pk)) do
+      nil -> :miss
+      pk_value -> {:hit, Map.get(existing_by_pk, pk_value)}
+    end
   end
 
   defp find_existing(_repo, _table, _record, []) do
@@ -151,48 +234,49 @@ defmodule PhoenixKitSync.DataImporter do
   end
 
   defp find_existing(repo, table, record, primary_keys) do
-    # Build WHERE clause for primary key match
-    conditions =
+    pk_pairs =
       primary_keys
       |> Enum.map(fn pk ->
-        value = Map.get(record, pk) || Map.get(record, String.to_atom(pk))
-
-        if is_nil(value) do
-          nil
-        else
-          "#{pk} = #{escape_value(value)}"
-        end
+        {pk, Map.get(record, pk) || Map.get(record, safe_atom(pk))}
       end)
-      |> Enum.reject(&is_nil/1)
+      |> Enum.reject(fn {_pk, v} -> is_nil(v) end)
 
-    if Enum.empty?(conditions) do
-      nil
-    else
-      where_clause = Enum.join(conditions, " AND ")
-      query = "SELECT * FROM #{table} WHERE #{where_clause} LIMIT 1"
+    with :ok <- validate_identifiers([table | primary_keys]),
+         false <- Enum.empty?(pk_pairs) do
+      {conditions, binds} =
+        pk_pairs
+        |> Enum.with_index(1)
+        |> Enum.map(fn {{pk, v}, idx} -> {~s["#{pk}" = $#{idx}], v} end)
+        |> Enum.unzip()
 
-      case repo.query(query) do
+      sql = ~s[SELECT * FROM "#{table}" WHERE #{Enum.join(conditions, " AND ")} LIMIT 1]
+
+      case repo.query(sql, binds) do
         {:ok, %{rows: [row], columns: columns}} ->
           Enum.zip(columns, row) |> Map.new()
 
         _ ->
           nil
       end
+    else
+      _ -> nil
     end
   end
 
   defp insert_record(repo, table, record) do
-    columns = Map.keys(record) |> Enum.map(&to_string/1)
-    values = Map.values(record) |> Enum.map(&escape_value/1)
+    columns = Map.keys(record)
 
-    query = """
-    INSERT INTO #{table} (#{Enum.join(columns, ", ")})
-    VALUES (#{Enum.join(values, ", ")})
-    """
+    with :ok <- validate_identifiers([table | columns]) do
+      binds = Enum.map(columns, fn c -> Map.get(record, c) end)
+      quoted_cols = Enum.map_join(columns, ", ", fn c -> ~s["#{c}"] end)
+      placeholders = 1..length(binds) |> Enum.map_join(", ", fn i -> "$#{i}" end)
 
-    case repo.query(query) do
-      {:ok, _} -> {:ok, :created}
-      {:error, error} -> {:error, format_error(error)}
+      sql = ~s[INSERT INTO "#{table}" (#{quoted_cols}) VALUES (#{placeholders})]
+
+      case repo.query(sql, binds) do
+        {:ok, _} -> {:ok, :created}
+        {:error, error} -> {:error, format_error(error)}
+      end
     end
   end
 
@@ -222,31 +306,34 @@ defmodule PhoenixKitSync.DataImporter do
   end
 
   defp update_record(repo, table, record, primary_keys, existing) do
-    # Build SET clause (exclude primary keys)
-    set_parts =
-      record
-      |> Enum.reject(fn {key, _} -> to_string(key) in primary_keys end)
-      |> Enum.map(fn {key, value} -> "#{key} = #{escape_value(value)}" end)
+    case Enum.reject(record, fn {key, _} -> to_string(key) in primary_keys end) do
+      [] -> {:ok, :skipped}
+      set_pairs -> do_update_record(repo, table, set_pairs, primary_keys, existing)
+    end
+  end
 
-    if Enum.empty?(set_parts) do
-      # Nothing to update
-      {:ok, :skipped}
-    else
-      # Build WHERE clause using primary keys from existing record
-      where_parts =
+  defp do_update_record(repo, table, set_pairs, primary_keys, existing) do
+    set_columns = Enum.map(set_pairs, fn {k, _v} -> to_string(k) end)
+
+    with :ok <- validate_identifiers([table | primary_keys ++ set_columns]) do
+      set_values = Enum.map(set_pairs, fn {_k, v} -> v end)
+      offset = length(set_values)
+
+      set_clause =
+        set_columns
+        |> Enum.with_index(1)
+        |> Enum.map_join(", ", fn {col, idx} -> ~s["#{col}" = $#{idx}] end)
+
+      where_clause =
         primary_keys
-        |> Enum.map(fn pk ->
-          value = Map.get(existing, pk)
-          "#{pk} = #{escape_value(value)}"
-        end)
+        |> Enum.with_index(offset + 1)
+        |> Enum.map_join(" AND ", fn {pk, idx} -> ~s["#{pk}" = $#{idx}] end)
 
-      query = """
-      UPDATE #{table}
-      SET #{Enum.join(set_parts, ", ")}
-      WHERE #{Enum.join(where_parts, " AND ")}
-      """
+      where_binds = Enum.map(primary_keys, fn pk -> Map.get(existing, pk) end)
 
-      case repo.query(query) do
+      sql = ~s[UPDATE "#{table}" SET #{set_clause} WHERE #{where_clause}]
+
+      case repo.query(sql, set_values ++ where_binds) do
         {:ok, _} -> {:ok, :updated}
         {:error, error} -> {:error, format_error(error)}
       end
@@ -312,6 +399,17 @@ defmodule PhoenixKitSync.DataImporter do
     parse_iso_datetime(value) || parse_iso_date(value) || parse_iso_time(value) || value
   end
 
+  # Pass structs (DateTime, Decimal, etc.) through so Postgrex can bind them natively
+  defp prepare_value(%_{} = value), do: value
+
+  # Encode plain maps and lists as JSON strings for jsonb/text columns
+  defp prepare_value(value) when is_map(value) or is_list(value) do
+    case Jason.encode(value) do
+      {:ok, json} -> json
+      _ -> value
+    end
+  end
+
   defp prepare_value(value), do: value
 
   # DateTime with timezone (e.g., "2025-12-15T18:56:59.387453Z")
@@ -354,53 +452,23 @@ defmodule PhoenixKitSync.DataImporter do
     end
   end
 
-  defp escape_value(nil), do: "NULL"
-
-  defp escape_value(value) when is_binary(value) do
-    # Escape single quotes and wrap in quotes
-    escaped = String.replace(value, "'", "''")
-    "'#{escaped}'"
-  end
-
-  defp escape_value(value) when is_boolean(value) do
-    if value, do: "TRUE", else: "FALSE"
-  end
-
-  defp escape_value(value) when is_integer(value) or is_float(value) do
-    to_string(value)
-  end
-
-  defp escape_value(%DateTime{} = dt) do
-    "'#{DateTime.to_iso8601(dt)}'"
-  end
-
-  defp escape_value(%NaiveDateTime{} = dt) do
-    "'#{NaiveDateTime.to_iso8601(dt)}'"
-  end
-
-  defp escape_value(%Date{} = d) do
-    "'#{Date.to_iso8601(d)}'"
-  end
-
-  defp escape_value(%Time{} = t) do
-    "'#{Time.to_iso8601(t)}'"
-  end
-
-  defp escape_value(%Decimal{} = d) do
-    Decimal.to_string(d)
-  end
-
-  defp escape_value(value) when is_map(value) or is_list(value) do
-    # JSON encode for jsonb columns
-    case Jason.encode(value) do
-      {:ok, json} -> "'#{String.replace(json, "'", "''")}'"
-      _ -> "NULL"
+  # All dynamic SQL identifiers (table + column names) are validated against
+  # SchemaInspector.valid_identifier?/1 before being interpolated with quotes.
+  # Values are always passed as parameterized binds via repo.query(sql, binds)
+  # — never interpolated into the SQL string — so the query body never carries
+  # attacker-controlled data.
+  defp validate_identifiers(names) do
+    if Enum.all?(names, &SchemaInspector.valid_identifier?/1) do
+      :ok
+    else
+      {:error, :invalid_identifier}
     end
   end
 
-  defp escape_value(value) do
-    # Fallback - try to convert to string
-    "'#{String.replace(to_string(value), "'", "''")}'"
+  defp safe_atom(name) when is_binary(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
   end
 
   defp format_error(%{postgres: %{message: message}}) do

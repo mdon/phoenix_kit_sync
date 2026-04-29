@@ -242,7 +242,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         {:ok, :not_found}
 
       {:ok, %{status: status, body: resp_body}} ->
-        Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
+        Logger.warning(
+          "Sync: Remote site returned unexpected status #{status}: " <>
+            truncate_body(resp_body)
+        )
+
         {:error, {:unexpected_status, status}}
 
       {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
@@ -313,7 +317,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         {:ok, :not_found}
 
       {:ok, %{status: status, body: resp_body}} ->
-        Logger.warning("Sync: Remote site returned unexpected status #{status}: #{resp_body}")
+        Logger.warning(
+          "Sync: Remote site returned unexpected status #{status}: " <>
+            truncate_body(resp_body)
+        )
+
         {:error, {:unexpected_status, status}}
 
       {:error, %{reason: reason}} when reason in [:econnrefused, :timeout, :nxdomain] ->
@@ -1261,6 +1269,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
 
   defp import_table_data(table_name, data, conflict_strategy) when is_list(data) do
     repo = PhoenixKit.RepoHelper.repo()
+    numeric_cols = fetch_numeric_columns(table_name)
 
     Logger.info("Sync: Importing #{length(data)} records into #{table_name}")
 
@@ -1268,7 +1277,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     results =
       Enum.reduce(data, %{imported: 0, skipped: 0, errors: 0, error_sample: nil}, fn record,
                                                                                      acc ->
-        insert_record(repo, table_name, record, conflict_strategy)
+        insert_record(repo, table_name, record, conflict_strategy, numeric_cols)
         |> accumulate_import_result(acc)
       end)
 
@@ -1308,12 +1317,20 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         _ -> []
       end
 
+    # Cache the set of numeric/decimal columns once per table so the per-value
+    # decimal-string detection in prepare_value/3 stays scoped to the columns
+    # where a "3.14" really is meant to become a %Decimal{}. Applying the
+    # regex to every string column would mis-cast version numbers or text
+    # labels and trip Postgrex type errors.
+    numeric_cols = fetch_numeric_columns(table_name)
+
     import_ctx = %{
       repo: repo,
       table_name: table_name,
       pk_col: pk_col,
       fk_columns: fk_columns,
       unique_sets: unique_sets,
+      numeric_cols: numeric_cols,
       conflict_strategy: conflict_strategy
     }
 
@@ -1362,7 +1379,13 @@ defmodule PhoenixKitSync.ConnectionNotifier do
         remapped_record = apply_fk_remap(record, ctx.fk_columns, remap)
 
         updated_acc =
-          insert_record(ctx.repo, ctx.table_name, remapped_record, ctx.conflict_strategy)
+          insert_record(
+            ctx.repo,
+            ctx.table_name,
+            remapped_record,
+            ctx.conflict_strategy,
+            ctx.numeric_cols
+          )
           |> accumulate_import_result(acc)
 
         {updated_acc, remap}
@@ -1407,11 +1430,16 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   defp stringify_pk(pk), do: inspect(pk)
 
   defp check_pk_exists(repo, table_name, pk_col, pk_value) do
-    sql = ~s[SELECT 1 FROM "#{table_name}" WHERE "#{pk_col}" = $1 LIMIT 1]
+    if SchemaInspector.valid_identifier?(table_name) and
+         SchemaInspector.valid_identifier?(pk_col) do
+      sql = ~s[SELECT 1 FROM "#{table_name}" WHERE "#{pk_col}" = $1 LIMIT 1]
 
-    case SQL.query(repo, sql, [prepare_value(pk_value)]) do
-      {:ok, %{num_rows: 1}} -> true
-      _ -> false
+      case SQL.query(repo, sql, [prepare_value(pk_value)]) do
+        {:ok, %{num_rows: 1}} -> true
+        _ -> false
+      end
+    else
+      false
     end
   rescue
     _ -> false
@@ -1420,6 +1448,23 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   defp find_match_by_unique(_repo, _table_name, _pk_col, _record, []), do: :no_match
 
   defp find_match_by_unique(repo, table_name, pk_col, record, [unique_cols | rest]) do
+    all_idents = [table_name, pk_col | unique_cols]
+
+    # Defense-in-depth: even though pk_col and unique_cols come from
+    # local schema introspection, table_name flows in from the import
+    # path (where it can ultimately trace back to a sender's wire data
+    # via pull_table_data_with_remap). Validate every dynamic identifier
+    # before splicing it into a quoted SQL string. Failures fall through
+    # to the next unique-constraint candidate, matching the existing
+    # rescue semantics.
+    if Enum.all?(all_idents, &SchemaInspector.valid_identifier?/1) do
+      do_find_match_by_unique(repo, table_name, pk_col, record, unique_cols, rest)
+    else
+      find_match_by_unique(repo, table_name, pk_col, record, rest)
+    end
+  end
+
+  defp do_find_match_by_unique(repo, table_name, pk_col, record, unique_cols, rest) do
     # Get values for this unique constraint's columns
     col_values =
       Enum.map(unique_cols, fn col ->
@@ -1483,7 +1528,8 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     %{acc | errors: acc.errors + 1}
   end
 
-  defp insert_record(repo, table_name, record, conflict_strategy) when is_map(record) do
+  defp insert_record(repo, table_name, record, conflict_strategy, numeric_cols)
+       when is_map(record) do
     pk_col = PhoenixKit.RepoHelper.get_pk_column(table_name)
 
     # For append strategy, strip primary key to let DB auto-generate new ID
@@ -1497,7 +1543,11 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     # Normalize all keys to strings for consistent SQL generation
     record = normalize_record_keys(record)
     columns = Map.keys(record)
-    values = Map.values(record) |> Enum.map(&prepare_value/1)
+
+    values =
+      Enum.map(columns, fn col ->
+        prepare_value(Map.get(record, col), col, numeric_cols)
+      end)
 
     placeholders =
       columns
@@ -1515,7 +1565,7 @@ defmodule PhoenixKitSync.ConnectionNotifier do
       {:error, Exception.message(e)}
   end
 
-  defp insert_record(_repo, _table_name, _record, _strategy), do: :error
+  defp insert_record(_repo, _table_name, _record, _strategy, _numeric_cols), do: :error
 
   defp build_on_conflict_clause("overwrite", pk_col, columns) do
     ~s[ON CONFLICT ("#{pk_col}") DO UPDATE SET #{build_update_clause(columns, pk_col)}]
@@ -1546,103 +1596,30 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     |> Enum.map_join(", ", fn col -> ~s["#{col}" = EXCLUDED."#{col}"] end)
   end
 
-  # Convert ISO8601 strings to DateTime/Date/Time structs for Postgrex
-  defp prepare_value(value) when is_binary(value) do
-    parse_datetime_string(value) || parse_date_string(value) || parse_time_string(value) ||
-      parse_decimal_string(value) || value
-  end
-
-  defp prepare_value(%{"__phoenix_kit_binary__" => encoded}) when is_binary(encoded) do
-    case Base.decode64(encoded) do
-      {:ok, binary} -> binary
-      :error -> encoded
+  # Caps a response body at 500 bytes before it lands in a log line. Response
+  # bodies can be arbitrarily large (JSON error payloads, HTML error pages
+  # returned by misconfigured proxies, etc.); logging them unbounded
+  # blows up log storage and can leak unrelated data that the remote
+  # site's error page might include.
+  @log_body_limit 500
+  defp truncate_body(body) when is_binary(body) do
+    case byte_size(body) do
+      size when size <= @log_body_limit -> body
+      size -> binary_part(body, 0, @log_body_limit) <> "…(#{size - @log_body_limit} more bytes)"
     end
   end
 
-  defp prepare_value(value), do: value
+  # Value / record-transformation helpers live in ConnectionNotifier.Prepare.
+  # Local aliases keep the call-site shape unchanged.
+  alias PhoenixKitSync.ConnectionNotifier.Prepare
 
-  # Record field helpers — records may have string or atom keys depending on
-  # whether they came from JSON (string keys) or internal code (atom keys).
-  # These helpers safely access/set fields without creating atoms from untrusted data.
-  defp get_record_field(record, field) when is_binary(field) do
-    case Map.get(record, field) do
-      nil -> Map.get(record, String.to_existing_atom(field))
-      val -> val
-    end
-  rescue
-    ArgumentError -> nil
-  end
+  defp prepare_value(value, column, numeric_cols),
+    do: Prepare.value(value, column, numeric_cols)
 
-  defp put_record_field(record, field, value) when is_binary(field) do
-    record
-    |> Map.delete(field)
-    |> Map.reject(fn {k, _} -> is_atom(k) and Atom.to_string(k) == field end)
-    |> Map.put(field, value)
-  end
-
-  defp drop_record_field(record, field) when is_binary(field) do
-    record
-    |> Map.delete(field)
-    |> Map.reject(fn {k, _} -> is_atom(k) and Atom.to_string(k) == field end)
-  end
-
-  # Normalize all map keys to strings for consistent SQL column generation
-  defp normalize_record_keys(record) when is_map(record) do
-    Map.new(record, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  # DateTime with timezone (e.g., "2025-12-15T18:56:59.387453Z")
-  @datetime_regex ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/
-  defp parse_datetime_string(value) do
-    if Regex.match?(@datetime_regex, value) do
-      case DateTime.from_iso8601(value) do
-        {:ok, dt, _offset} -> dt
-        _ -> parse_naive_datetime(value)
-      end
-    end
-  end
-
-  defp parse_naive_datetime(value) do
-    case NaiveDateTime.from_iso8601(value) do
-      {:ok, ndt} -> ndt
-      _ -> nil
-    end
-  end
-
-  # Date only (e.g., "2025-12-15")
-  @date_regex ~r/^\d{4}-\d{2}-\d{2}$/
-  defp parse_date_string(value) do
-    if Regex.match?(@date_regex, value) do
-      case Date.from_iso8601(value) do
-        {:ok, d} -> d
-        _ -> nil
-      end
-    end
-  end
-
-  # Time only (e.g., "18:56:59" or "18:56:59.387453")
-  @time_regex ~r/^\d{2}:\d{2}:\d{2}(\.\d+)?$/
-  defp parse_time_string(value) do
-    if Regex.match?(@time_regex, value) do
-      case Time.from_iso8601(value) do
-        {:ok, t} -> t
-        _ -> nil
-      end
-    end
-  end
-
-  # Decimal-like strings (e.g., "0.00", "123.45", "-99.99")
-  # Only matches strings that look like decimals with a dot — plain integers
-  # like "123" are left as strings since Postgrex handles those fine.
-  @decimal_regex ~r/^-?\d+\.\d+$/
-  defp parse_decimal_string(value) do
-    if Regex.match?(@decimal_regex, value) do
-      Decimal.new(value)
-    end
-  rescue
-    _ -> nil
-  end
+  defp prepare_value(value), do: Prepare.value(value)
+  defp fetch_numeric_columns(table_name), do: Prepare.numeric_columns(table_name)
+  defp get_record_field(record, field), do: Prepare.get_field(record, field)
+  defp put_record_field(record, field, value), do: Prepare.put_field(record, field, value)
+  defp drop_record_field(record, field), do: Prepare.drop_field(record, field)
+  defp normalize_record_keys(record), do: Prepare.normalize_keys(record)
 end
