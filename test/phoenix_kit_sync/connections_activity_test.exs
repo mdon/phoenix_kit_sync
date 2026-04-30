@@ -87,6 +87,67 @@ defmodule PhoenixKitSync.ConnectionsActivityTest do
     end
   end
 
+  # F3 follow-up: a no-op `update_connection/3` (form submit with every
+  # value matching the current row) was producing an `"updated"` activity
+  # row with `changed_fields = []`. Pure noise in the audit feed.
+  describe "update_connection/3 — empty-change branch (F3)" do
+    test "no-op update writes no activity row" do
+      connection = create_active_sender_connection()
+      actor_uuid = UUIDv7.generate()
+
+      before_count = activity_count_for(connection.uuid, "sync.connection.updated")
+
+      # Same-value update: every attr matches the current struct.
+      {:ok, _updated} =
+        Connections.update_connection(
+          connection,
+          %{
+            "name" => connection.name,
+            "max_records_per_request" => connection.max_records_per_request
+          },
+          actor_uuid: actor_uuid
+        )
+
+      after_count = activity_count_for(connection.uuid, "sync.connection.updated")
+      assert after_count == before_count
+    end
+
+    test "real change still writes the row (regression guard)" do
+      # Confirms the empty-changes guard didn't accidentally swallow the
+      # legitimate path. Without this, a future bug that always classifies
+      # changes as `[]` would silently kill audit logging.
+      connection = create_active_sender_connection()
+
+      before_count = activity_count_for(connection.uuid, "sync.connection.updated")
+
+      {:ok, _updated} =
+        Connections.update_connection(
+          connection,
+          %{"max_records_per_request" => (connection.max_records_per_request || 10_000) + 1},
+          actor_uuid: UUIDv7.generate()
+        )
+
+      after_count = activity_count_for(connection.uuid, "sync.connection.updated")
+      assert after_count == before_count + 1
+    end
+  end
+
+  # F2 follow-up: structural source pin. The rescue branch on the activity
+  # log used to be `_ -> :ok` — silent. A broken `PhoenixKit.Activity.log/1`
+  # in production wiped the audit trail with no breadcrumb. Force-raising
+  # in tests would require dropping the activities table (sandbox-unsafe)
+  # or mocking; since the codebase doesn't use mocks, we pin the source
+  # shape to ensure future edits don't regress it back to silent.
+  describe "log_sync_activity/4 — rescue branch logs (F2)" do
+    test "rescue clause calls Logger.warning with action + connection_uuid + error" do
+      source = File.read!("lib/phoenix_kit_sync/connections.ex")
+
+      assert source =~
+               ~r/rescue\s+#[^\n]*\n(?:\s*#[^\n]*\n)*\s+e ->\s+Logger\.warning\([\s\S]+?action=sync\.connection\.#\{action\}[\s\S]+?connection_uuid=#\{connection\.uuid\}[\s\S]+?error=#\{Exception\.message\(e\)\}/,
+             "log_sync_activity rescue must Logger.warning with action, connection_uuid, and error message"
+    end
+  end
+
   describe "structural pins on the five status-mutation :error branches" do
     test "delete_connection logs on :error" do
       source = File.read!("lib/phoenix_kit_sync/connections.ex")
@@ -144,6 +205,24 @@ defmodule PhoenixKitSync.ConnectionsActivityTest do
 
     {:ok, active} = Connections.approve_connection(conn, UUIDv7.generate())
     active
+  end
+
+  # Count rows matching (resource_uuid, action) for empty-change pinning.
+  # Used by the F3 follow-up tests to assert that a no-op update writes
+  # zero rows while a real change writes exactly one.
+  defp activity_count_for(uuid, action) do
+    raw =
+      TestRepo.query!(
+        """
+        SELECT COUNT(*)
+        FROM phoenix_kit_activities
+        WHERE resource_uuid = $1 AND action = $2
+        """,
+        [Ecto.UUID.dump!(uuid), action]
+      )
+
+    [[count]] = raw.rows
+    count
   end
 
   # Filter by action explicitly: `inserted_at` is second-precision and

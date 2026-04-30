@@ -156,6 +156,70 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
     end
   end
 
+  # F1 follow-up: phoenix-thinking Iron Law pin. mount/3 fires on both the
+  # HTTP dead render and the WebSocket connect, so an unconditional
+  # `load_connections/1` in mount doubles every list query and — worse for
+  # this LV — fans the async sender-status / receiver-verification HTTP
+  # calls twice. The dead-render path now seeds empty assigns; the data
+  # only arrives once the socket is live.
+  describe "Iron Law: mount/3 must not query during dead render (F1)" do
+    test "dead render does not include connection names from the DB", %{conn: conn} do
+      marker = "IronLawMarker-#{System.unique_integer([:positive])}"
+      _connection = create_connection(%{"name" => marker})
+
+      conn = put_test_scope(conn, fake_scope())
+
+      # `Phoenix.ConnTest.get/2` issues only the HTTP dead-render — no
+      # WebSocket upgrade. If `load_connections/1` runs in mount, the
+      # marker name will be in the rendered body. After the F1 fix, the
+      # dead render has empty `:sender_connections` / `:receiver_connections`
+      # assigns and the marker is absent.
+      resp = Phoenix.ConnTest.get(conn, "/en/admin/sync/connections")
+      refute resp.resp_body =~ marker
+    end
+
+    test "live render (post-WebSocket) does include the connection", %{conn: conn} do
+      marker = "PostWSMarker-#{System.unique_integer([:positive])}"
+      _connection = create_connection(%{"name" => marker})
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, _view, html} = live(conn, "/en/admin/sync/connections")
+
+      # The live render runs after the WebSocket connect, so the data
+      # *does* arrive — pinning that the gate is `connected?`-conditional,
+      # not "never load".
+      assert html =~ marker
+    end
+  end
+
+  # F4 follow-up: gettext-wrap the literal "Revoked by admin" reason. The
+  # reason is persisted to `revoked_reason` and surfaced to admins; same
+  # translation surface as the strings Batch 2 wrapped. Test asserts the
+  # persisted reason equals the gettext output (which falls through to
+  # the source string when no translation is loaded).
+  describe "revoke reason is gettext-wrapped (F4)" do
+    test "revoke_connection persists a gettext-wrapped default reason", %{conn: conn} do
+      receiver = create_connection(%{"direction" => "receiver", "status" => "active"})
+      admin_scope = fake_scope()
+
+      conn = put_test_scope(conn, admin_scope)
+      {:ok, view, _html} = live(conn, "/en/admin/sync/connections")
+
+      view
+      |> element("[phx-click='revoke_connection'][phx-value-uuid='#{receiver.uuid}']")
+      |> render_click()
+
+      reloaded = Connections.get_connection!(receiver.uuid)
+
+      # PhoenixKitWeb.Gettext is the backend ConnectionsLive imports via
+      # `use Gettext`. At runtime with no translation loaded, gettext/1
+      # returns the source string — so the persisted reason equals the
+      # source string. The pin: it goes through gettext, not a literal.
+      expected = Gettext.gettext(PhoenixKitWeb.Gettext, "Revoked by admin")
+      assert reloaded.revoked_reason == expected
+    end
+  end
+
   describe "approve pending connection" do
     test "approve button triggers approve_connection and logs activity", %{conn: conn} do
       connection = create_connection(%{"name" => "Pending Approval", "status" => "pending"})

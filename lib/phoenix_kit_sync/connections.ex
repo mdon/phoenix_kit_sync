@@ -91,7 +91,17 @@ defmodule PhoenixKitSync.Connections do
       rescue
         # Activity table might not exist in a minimal test setup; don't
         # let an audit-log failure propagate into the caller's result.
-        _ -> :ok
+        # Log the failure so a broken activity backend in production is
+        # visible to operators rather than silently dropping audit rows.
+        e ->
+          Logger.warning(
+            "[Sync.Connections] activity log failed " <>
+              "| action=sync.connection.#{action} " <>
+              "| connection_uuid=#{connection.uuid} " <>
+              "| error=#{Exception.message(e)}"
+          )
+
+          :ok
       end
     end
 
@@ -350,9 +360,15 @@ defmodule PhoenixKitSync.Connections do
       {:ok, updated} ->
         broadcast_connection_update(connection, updated, changed_fields)
 
-        log_sync_activity("updated", updated, opts, %{
-          "changed_fields" => Enum.map(changed_fields, &to_string/1)
-        })
+        # No-op save (form submit with all values matching current row):
+        # skip the audit row too. Without this guard the feed accrues
+        # `"updated"` rows whose `changed_fields` is `[]` — pure noise
+        # that dilutes signal in incident forensics.
+        if changed_fields != [] do
+          log_sync_activity("updated", updated, opts, %{
+            "changed_fields" => Enum.map(changed_fields, &to_string/1)
+          })
+        end
 
       {:error, changeset} ->
         Logger.warning(

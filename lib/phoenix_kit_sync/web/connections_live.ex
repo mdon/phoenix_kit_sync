@@ -48,9 +48,25 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
       |> assign_form(nil)
       |> assign(:direction_filter, nil)
       |> assign(:sender_statuses, %{})
-      |> load_connections()
+      |> maybe_load_connections()
 
     {:ok, socket}
+  end
+
+  # Iron Law: mount/3 fires twice (HTTP dead render + WebSocket connect).
+  # Querying unconditionally doubles every navigation's DB load and — worse
+  # here — fans out the async sender-status / receiver-verification HTTP
+  # calls twice. Mirror history.ex:43: only load when the socket is live;
+  # for the dead render seed empty assigns so render/1 doesn't crash on
+  # missing keys.
+  defp maybe_load_connections(socket) do
+    if connected?(socket) do
+      load_connections(socket)
+    else
+      socket
+      |> assign(:sender_connections, [])
+      |> assign(:receiver_connections, [])
+    end
   end
 
   @impl true
@@ -316,7 +332,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     connection = Connections.get_connection!(uuid)
     current_user = socket.assigns.phoenix_kit_current_scope.user
 
-    case Connections.revoke_connection(connection, current_user.uuid, "Revoked by admin") do
+    case Connections.revoke_connection(connection, current_user.uuid, gettext("Revoked by admin")) do
       {:ok, updated_connection} ->
         notify_remote_async(fn ->
           ConnectionNotifier.notify_status_change(updated_connection, "revoked")
