@@ -192,6 +192,67 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
     end
   end
 
+  # F1' follow-up (PR #7 review): handle_params/3's "show"/"edit"/"sync"
+  # clauses queried Connections.get_connection/1 unconditionally, including
+  # during the HTTP dead render of a deep-linked URL. Same Iron Law as F1
+  # applied to mount; the dispatcher is now gated on connected?(socket) so
+  # dead render is a no-op. The F4 test above (revoke gettext) is the
+  # primary place this path is now exercised in the suite.
+  describe "Iron Law: handle_params must not query during dead render of deep links (F1')" do
+    test "dead render of ?action=show&id=<uuid> does not include connection details",
+         %{conn: conn} do
+      marker = "DeepLinkShowMarker-#{System.unique_integer([:positive])}"
+      connection = create_connection(%{"name" => marker, "direction" => "receiver"})
+
+      conn = put_test_scope(conn, fake_scope())
+
+      # `Phoenix.ConnTest.get/2` issues only the HTTP dead-render — no
+      # WebSocket upgrade. If the show clause queries the DB in dead render,
+      # `setup_connection_view(:show)` assigns `:selected_connection` and
+      # the detail template renders the connection's name. After the F1'
+      # fix the show clause is gated on `connected?(socket)`, so dead
+      # render falls through with the empty list-view assigns from mount.
+      resp =
+        Phoenix.ConnTest.get(
+          conn,
+          "/en/admin/sync/connections?action=show&id=#{connection.uuid}"
+        )
+
+      refute resp.resp_body =~ marker
+    end
+
+    test "dead render of ?action=edit&id=<uuid> does not include connection details",
+         %{conn: conn} do
+      marker = "DeepLinkEditMarker-#{System.unique_integer([:positive])}"
+      connection = create_connection(%{"name" => marker, "direction" => "sender"})
+
+      conn = put_test_scope(conn, fake_scope())
+
+      resp =
+        Phoenix.ConnTest.get(
+          conn,
+          "/en/admin/sync/connections?action=edit&id=#{connection.uuid}"
+        )
+
+      refute resp.resp_body =~ marker
+    end
+
+    test "live render of deep link does include connection details", %{conn: conn} do
+      marker = "PostWSDeepLinkMarker-#{System.unique_integer([:positive])}"
+      connection = create_connection(%{"name" => marker, "direction" => "receiver"})
+
+      conn = put_test_scope(conn, fake_scope())
+
+      {:ok, _view, html} =
+        live(conn, "/en/admin/sync/connections?action=show&id=#{connection.uuid}")
+
+      # The connected phase re-fires handle_params after the WebSocket
+      # connect, so the show branch resolves and renders the detail view.
+      # Pins that the gate is `connected?`-conditional, not "never load".
+      assert html =~ marker
+    end
+  end
+
   # F4 follow-up: gettext-wrap the literal "Revoked by admin" reason. The
   # reason is persisted to `revoked_reason` and surfaced to admins; same
   # translation surface as the strings Batch 2 wrapped. Test asserts the

@@ -85,16 +85,20 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     |> assign_form(changeset)
   end
 
-  defp handle_action(socket, "edit", id, _params) when not is_nil(id) do
-    handle_connection_action(socket, id, :edit)
-  end
-
-  defp handle_action(socket, "show", id, _params) when not is_nil(id) do
-    handle_connection_action(socket, id, :show)
-  end
-
-  defp handle_action(socket, "sync", id, _params) when not is_nil(id) do
-    handle_sync_action(socket, id)
+  # Iron Law (F1'): handle_params/3 fires on both the dead render and the
+  # connected phase. Each of these branches queries the DB via
+  # Connections.get_connection/1 (and the nil branch then fans out
+  # load_connections). Gate the whole dispatch on connected?(socket) so
+  # dead render is a no-op — mount/3 already seeded safe list-view assigns
+  # via maybe_load_connections/1, and the connected phase re-fires
+  # handle_params and resolves the action. Mirrors the F1 fix for mount.
+  defp handle_action(socket, action, id, _params)
+       when action in ["show", "edit", "sync"] and not is_nil(id) do
+    if connected?(socket) do
+      dispatch_resource_action(socket, action, id)
+    else
+      socket
+    end
   end
 
   defp handle_action(socket, _action, _id, params) do
@@ -105,6 +109,15 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     |> assign(:direction_filter, params["direction"])
     |> maybe_load_connections()
   end
+
+  defp dispatch_resource_action(socket, "show", id),
+    do: handle_connection_action(socket, id, :show)
+
+  defp dispatch_resource_action(socket, "edit", id),
+    do: handle_connection_action(socket, id, :edit)
+
+  defp dispatch_resource_action(socket, "sync", id),
+    do: handle_sync_action(socket, id)
 
   defp handle_connection_action(socket, id, mode) do
     case Connections.get_connection(id) do
