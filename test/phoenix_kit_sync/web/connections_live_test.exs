@@ -267,6 +267,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
       # list view. Mount directly into the detail view via the URL the
       # `show_connection` push_patch would land on.
       conn = put_test_scope(conn, admin_scope)
+
       {:ok, view, _html} =
         live(conn, "/en/admin/sync/connections?action=show&id=#{receiver.uuid}")
 
