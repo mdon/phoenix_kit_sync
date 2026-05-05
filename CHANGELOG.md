@@ -1,3 +1,18 @@
+## 0.1.2 - 2026-05-05
+
+### Changed
+- Test schema setup now uses `PhoenixKit.Migration.ensure_current/2` (requires
+  `phoenix_kit` 1.7.105+) instead of hand-rolled inline DDL — eliminates schema
+  drift between test and production by construction.
+
+### Fixed
+- LiveView Iron Law: `ConnectionsLive.mount/3` no longer queries the DB during
+  the HTTP dead render; `load_connections/1` is gated on `connected?(socket)`.
+- LiveView Iron Law: `ConnectionsLive.handle_params/3` `show`/`edit`/`sync`
+  branches no longer query the DB during the dead render of deep-linked URLs.
+- F4 revoke gettext test now correctly mounts into the connection detail view
+  (where the revoke button lives) via deep-link URL.
+
 ## 0.1.1 - 2026-04-11
 
 ### Fixed
