@@ -166,7 +166,7 @@ createdb phoenix_kit_sync_test
 mix test
 ```
 
-Integration tests are automatically excluded when the database is unavailable. The test helper creates the `uuid_generate_v7()` function and runs `PhoenixKitSync.Migration` on first run.
+Integration tests are automatically excluded when the database is unavailable. Schema setup runs core's versioned migrations directly via `PhoenixKit.Migration.ensure_current/2` in `test/test_helper.exs` — no module-owned DDL anywhere. Sync tables come from core (V37 creates them as `phoenix_kit_db_sync_*`; V44 renames to `phoenix_kit_sync_*`; V56/V58/V61/V73/V74 evolve them).
 
 The critical config wiring is in `config/test.exs`:
 
