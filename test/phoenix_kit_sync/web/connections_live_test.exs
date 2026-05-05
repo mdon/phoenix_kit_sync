@@ -202,8 +202,12 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
       receiver = create_connection(%{"direction" => "receiver", "status" => "active"})
       admin_scope = fake_scope()
 
+      # The revoke button lives in the connection detail view, not the
+      # list view. Mount directly into the detail view via the URL the
+      # `show_connection` push_patch would land on.
       conn = put_test_scope(conn, admin_scope)
-      {:ok, view, _html} = live(conn, "/en/admin/sync/connections")
+      {:ok, view, _html} =
+        live(conn, "/en/admin/sync/connections?action=show&id=#{receiver.uuid}")
 
       view
       |> element("[phx-click='revoke_connection'][phx-value-uuid='#{receiver.uuid}']")

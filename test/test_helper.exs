@@ -38,76 +38,23 @@ repo_available =
     try do
       {:ok, _} = TestRepo.start_link()
 
-      # Enable uuid-ossp extension
-      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-
-      # Enable pgcrypto — uuid_generate_v7() depends on `gen_random_bytes`,
-      # which lives in pgcrypto. On a fresh `createdb` without it, the
-      # CREATE FUNCTION below succeeds but every insert that defaults to
-      # uuid_generate_v7() fails with "function gen_random_bytes does not
-      # exist". See workspace AGENTS.md flaky-test traps.
-      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
-
-      # Create uuid_generate_v7() function (normally created by PhoenixKit V40 migration)
-      TestRepo.query!("""
-      CREATE OR REPLACE FUNCTION uuid_generate_v7()
-      RETURNS uuid AS $$
-      DECLARE
-        unix_ts_ms bytea;
-        uuid_bytes bytea;
-      BEGIN
-        unix_ts_ms := substring(int8send(floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint) FROM 3);
-        uuid_bytes := unix_ts_ms || gen_random_bytes(10);
-        uuid_bytes := set_byte(uuid_bytes, 6, (get_byte(uuid_bytes, 6) & 15) | 112);
-        uuid_bytes := set_byte(uuid_bytes, 8, (get_byte(uuid_bytes, 8) & 63) | 128);
-        RETURN encode(uuid_bytes, 'hex')::uuid;
-      END;
-      $$ LANGUAGE plpgsql VOLATILE;
-      """)
-
-      # Run sync migration to create tables via Ecto.Migrator
-      Ecto.Migrator.up(TestRepo, 0, PhoenixKitSync.Migration, log: false)
-
-      # Create a minimal phoenix_kit_activities table so
-      # PhoenixKit.Activity.log/1 calls from Connections mutations succeed
-      # without polluting test output with "relation does not exist"
-      # warnings. Shape matches the real schema that core phoenix_kit
-      # migrations build (uuid PK via uuid_generate_v7, JSONB metadata,
-      # timestamps). Without this, every mutation in the suite logged a
-      # warning even though the operation itself succeeded.
-      TestRepo.query!("""
-      CREATE TABLE IF NOT EXISTS phoenix_kit_activities (
-        uuid uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
-        action varchar(255) NOT NULL,
-        module varchar(100),
-        mode varchar(50),
-        actor_uuid uuid,
-        resource_type varchar(100),
-        resource_uuid uuid,
-        target_uuid uuid,
-        metadata jsonb DEFAULT '{}'::jsonb,
-        inserted_at timestamp without time zone DEFAULT NOW()
-      )
-      """)
-
-      # Create phoenix_kit_settings with the REAL schema columns. LiveView
-      # mounts read `PhoenixKit.Settings.get_project_title/0` which queries
-      # this table; without it, every LV test crashes before render.
-      # Column shape is load-bearing: a mismatch ("column module does not
-      # exist") aborts the sandbox transaction — every subsequent query
-      # in the same test fails with "current transaction is aborted".
-      # See agents.md:664-673.
-      TestRepo.query!("""
-      CREATE TABLE IF NOT EXISTS phoenix_kit_settings (
-        uuid uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
-        key varchar(255) NOT NULL UNIQUE,
-        value text,
-        value_json jsonb,
-        module varchar(100),
-        date_added timestamp without time zone DEFAULT NOW(),
-        date_updated timestamp without time zone DEFAULT NOW()
-      )
-      """)
+      # Build the schema directly from core's versioned migrations — same
+      # call the host app makes in production. The sync tables come from
+      # core (V37 creates them as `phoenix_kit_db_sync_*`; V44 renames to
+      # `phoenix_kit_sync_*`; V56/V58/V61/V73/V74 evolve them). The
+      # `phoenix_kit_settings` (V03), `phoenix_kit_activities` (V90), and
+      # `uuid-ossp` / `pgcrypto` extensions + `uuid_generate_v7()` function
+      # (V40) are also owned by core. No module-side DDL in this helper.
+      #
+      # `ensure_current/2` (core 1.7.105+ / phoenix_kit#515) re-applies
+      # any newly-shipped Vxxx migrations on every boot by passing a
+      # fresh wall-clock version to Ecto.Migrator. Replaces the old shape
+      # that mixed inline DDL with `Ecto.Migrator.up(TestRepo, 0,
+      # PhoenixKitSync.Migration, ...)` — the inline DDL drifted from
+      # production schemas, and `up(_, 0, ...)` silently went stale once
+      # `0` landed in `schema_migrations`. See
+      # `dev_docs/migration_cleanup.md` for the staleness story.
+      PhoenixKit.Migration.ensure_current(TestRepo, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
