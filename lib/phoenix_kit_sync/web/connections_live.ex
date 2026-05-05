@@ -103,7 +103,7 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
     |> assign(:selected_connection, nil)
     |> assign_form(nil)
     |> assign(:direction_filter, params["direction"])
-    |> load_connections()
+    |> maybe_load_connections()
   end
 
   defp handle_connection_action(socket, id, mode) do

@@ -163,17 +163,6 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
   # calls twice. The dead-render path now seeds empty assigns; the data
   # only arrives once the socket is live.
   describe "Iron Law: mount/3 must not query during dead render (F1)" do
-    # Pre-existing failure surfaced by the migration cleanup that swapped
-    # the test_helper to `PhoenixKit.Migration.ensure_current/2` (which
-    # applies core's full schema). The F1 fix in commit 7916940 gated
-    # `mount/3` with `connected?(socket)` but missed the catch-all
-    # `handle_action/4` clause in `handle_params/3` (connections_live.ex:106),
-    # which still calls `load_connections/1` unconditionally — so the
-    # marker leaks into the dead render via the handle_params path.
-    # Out of scope for migration cleanup; needs a one-line LV fix
-    # (swap `load_connections()` → `maybe_load_connections()` in the
-    # catch-all handle_action).
-    @tag :skip
     test "dead render does not include connection names from the DB", %{conn: conn} do
       marker = "IronLawMarker-#{System.unique_integer([:positive])}"
       _connection = create_connection(%{"name" => marker})
@@ -209,21 +198,16 @@ defmodule PhoenixKitSync.Web.ConnectionsLiveTest do
   # persisted reason equals the gettext output (which falls through to
   # the source string when no translation is loaded).
   describe "revoke reason is gettext-wrapped (F4)" do
-    # Pre-existing failure surfaced by the migration cleanup. The test
-    # was committed in 7916940 without ever running successfully (the
-    # commit message says "DB tests will be exercised by the next full
-    # mix test run on a host with the test DB available"). The
-    # `revoke_connection` button only exists in the connection detail
-    # view (connections_live.ex:1940), but the test asserts on it from
-    # the list view. The test needs a `live(...) → element('show_connection') → click → element('revoke_connection') → click` flow,
-    # OR a context-layer call. Out of scope for migration cleanup.
-    @tag :skip
     test "revoke_connection persists a gettext-wrapped default reason", %{conn: conn} do
       receiver = create_connection(%{"direction" => "receiver", "status" => "active"})
       admin_scope = fake_scope()
 
+      # The revoke button lives in the connection detail view, not the
+      # list view. Mount directly into the detail view via the URL the
+      # `show_connection` push_patch would land on.
       conn = put_test_scope(conn, admin_scope)
-      {:ok, view, _html} = live(conn, "/en/admin/sync/connections")
+      {:ok, view, _html} =
+        live(conn, "/en/admin/sync/connections?action=show&id=#{receiver.uuid}")
 
       view
       |> element("[phx-click='revoke_connection'][phx-value-uuid='#{receiver.uuid}']")
