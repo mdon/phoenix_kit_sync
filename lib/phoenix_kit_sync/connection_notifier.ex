@@ -1224,8 +1224,16 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     end
   end
 
-  defp format_error(%Mint.TransportError{reason: reason}) do
+  defp format_error(%Finch.TransportError{reason: reason}) do
     "Connection failed: #{inspect(reason)}"
+  end
+
+  defp format_error(%Finch.HTTPError{reason: reason}) do
+    "HTTP error: #{inspect(reason)}"
+  end
+
+  defp format_error(%Finch.Error{reason: reason}) do
+    "Finch error: #{inspect(reason)}"
   end
 
   defp format_error({:exception, msg}) do

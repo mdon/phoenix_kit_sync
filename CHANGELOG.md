@@ -1,3 +1,11 @@
+## 0.1.3 - 2026-05-12
+
+### Fixed
+- Dialyzer: `ConnectionNotifier.format_error/1` matched `Mint.TransportError`,
+  but Finch returns `Finch.TransportError`/`Finch.HTTPError`/`Finch.Error`
+  (Mint errors are wrapped as the `source` of `Finch.TransportError`). The
+  unreachable pattern is replaced with the three Finch error structs.
+
 ## 0.1.2 - 2026-05-05
 
 ### Changed
