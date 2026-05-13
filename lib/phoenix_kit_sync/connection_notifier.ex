@@ -1224,11 +1224,16 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     end
   end
 
-  defp format_error(%Finch.TransportError{reason: reason}) do
+  # Finch returns `{:error, Exception.t()}` where the exception is one of
+  # `Mint.TransportError` / `Mint.HTTPError` (from the underlying Mint
+  # client) or `Finch.Error` (Finch-specific wrapper). It does NOT have
+  # its own `Finch.TransportError` or `Finch.HTTPError` structs — match
+  # Mint's directly.
+  defp format_error(%Mint.TransportError{reason: reason}) do
     "Connection failed: #{inspect(reason)}"
   end
 
-  defp format_error(%Finch.HTTPError{reason: reason}) do
+  defp format_error(%Mint.HTTPError{reason: reason}) do
     "HTTP error: #{inspect(reason)}"
   end
 
