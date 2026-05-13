@@ -1,3 +1,16 @@
+## 0.1.4 - 2026-05-13
+
+### Fixed
+- `ConnectionNotifier.format_error/1` now correctly formats the `Finch.*`
+  exception structs that `Finch.request/3` actually returns at runtime.
+  PR #9 reverted these heads to `Mint.TransportError` / `Mint.HTTPError`
+  to unblock parent-app builds where Finch wasn't loaded at compile time,
+  but Finch wraps every `Mint.*` error via `Finch.Error.wrap/1` before
+  returning, so the `Mint.*` heads never matched in production and errors
+  fell through to the `inspect/1` catch-all. The `Finch.*` heads are now
+  restored and gated with `Code.ensure_loaded?/1` so the module still
+  compiles cleanly when Finch isn't loaded in the parent build.
+
 ## 0.1.3 - 2026-05-12
 
 ### Fixed

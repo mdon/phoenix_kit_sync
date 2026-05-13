@@ -1,7 +1,7 @@
 defmodule PhoenixKitSync.MixProject do
   use Mix.Project
 
-  @version "0.1.3"
+  @version "0.1.4"
   @description "Peer-to-peer data sync module for PhoenixKit"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_sync"
 
@@ -34,7 +34,12 @@ defmodule PhoenixKitSync.MixProject do
     [
       quality: ["format", "credo --strict", "dialyzer"],
       "quality.ci": ["format --check-formatted", "credo --strict", "dialyzer"],
-      precommit: ["compile", "quality"],
+      precommit: [
+        "compile --force --warnings-as-errors",
+        "format",
+        "deps.unlock --check-unused",
+        "quality.ci"
+      ],
       "test.setup": ["ecto.create --quiet", "ecto.migrate --quiet"],
       "test.reset": ["ecto.drop --quiet", "test.setup"]
     ]

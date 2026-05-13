@@ -1224,21 +1224,30 @@ defmodule PhoenixKitSync.ConnectionNotifier do
     end
   end
 
-  # Finch returns `{:error, Exception.t()}` where the exception is one of
-  # `Mint.TransportError` / `Mint.HTTPError` (from the underlying Mint
-  # client) or `Finch.Error` (Finch-specific wrapper). It does NOT have
-  # its own `Finch.TransportError` or `Finch.HTTPError` structs — match
-  # Mint's directly.
-  defp format_error(%Mint.TransportError{reason: reason}) do
-    "Connection failed: #{inspect(reason)}"
+  # `Finch.request/3` returns `{:error, Finch.error()}` where the struct is
+  # `Finch.TransportError`, `Finch.HTTPError`, or `Finch.Error` — `Mint.*`
+  # errors from the underlying client are wrapped via `Finch.Error.wrap/1`
+  # before being returned. The `Finch.*` heads are gated with
+  # `Code.ensure_loaded?/1` because Finch is a transitive dep (via
+  # `:phoenix_kit`) and may not be compiled before this module in some
+  # parent-app build orders, in which case the struct lookup would fail at
+  # compile time.
+  if Code.ensure_loaded?(Finch.TransportError) do
+    defp format_error(%Finch.TransportError{reason: reason}) do
+      "Connection failed: #{inspect(reason)}"
+    end
   end
 
-  defp format_error(%Mint.HTTPError{reason: reason}) do
-    "HTTP error: #{inspect(reason)}"
+  if Code.ensure_loaded?(Finch.HTTPError) do
+    defp format_error(%Finch.HTTPError{reason: reason}) do
+      "HTTP error: #{inspect(reason)}"
+    end
   end
 
-  defp format_error(%Finch.Error{reason: reason}) do
-    "Finch error: #{inspect(reason)}"
+  if Code.ensure_loaded?(Finch.Error) do
+    defp format_error(%Finch.Error{reason: reason}) do
+      "Finch error: #{inspect(reason)}"
+    end
   end
 
   defp format_error({:exception, msg}) do
