@@ -1,3 +1,18 @@
+## 0.1.5 - 2026-05-21
+
+### Fixed
+- `ConnectionNotifier` no longer hardcodes `/phoenix_kit` as the remote API
+  path prefix when notifying remote sites (issue #8). It now derives the
+  prefix from the local site's `PhoenixKit.Config.get_url_prefix/0`, which
+  mirrors the remote in symmetric deployments — the common case — so the
+  default routing (no custom prefix) stops returning `404 Not Found` on
+  `register-connection` and the other sync API calls. Deployments whose
+  remote uses a different prefix than the local site can override it with
+  `config :phoenix_kit_sync, remote_url_prefix: "/custom"`. The prefix is
+  normalized (leading slash ensured, trailing slash stripped, `""`/`"/"`
+  collapsed to no prefix), and the ten near-identical URL builders were
+  collapsed onto a single `build_sync_url/2` helper.
+
 ## 0.1.4 - 2026-05-13
 
 ### Fixed

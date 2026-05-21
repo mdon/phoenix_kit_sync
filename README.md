@@ -242,6 +242,19 @@ Cross-site communication endpoints (under the configured URL prefix):
 - `POST /sync/api/table-records` — Get table records
 - `GET /sync/api/status` — Check module status
 
+When notifying a remote site, `ConnectionNotifier` prepends the remote's URL
+prefix to these paths. By default it mirrors the *local* site's
+`PhoenixKit.Config.get_url_prefix/0`, which is correct when both deployments
+share the same routing config. If a remote mounts PhoenixKit under a different
+prefix than the local site, override it:
+
+```elixir
+config :phoenix_kit_sync, remote_url_prefix: "/custom"
+```
+
+Use `""` (or `"/"`) when the remote serves the sync API at the root (e.g.
+`https://remote.example.com/sync/api/...`).
+
 ## Database
 
 Table migrations are currently managed by PhoenixKit's core migration system.

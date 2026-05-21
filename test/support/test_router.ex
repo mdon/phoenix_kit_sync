@@ -49,8 +49,10 @@ defmodule PhoenixKitSync.Test.Router do
   # Mirror of PhoenixKitSync.Routes.generate/1 production layout, scoped
   # to the test endpoint so ApiController actions are reachable through
   # Phoenix.ConnTest. Mounted at both `/sync/api/*` (used by direct
-  # ConnTest tests) and `/phoenix_kit/sync/api/*` (used by
-  # ConnectionNotifier, which hardcodes the `/phoenix_kit` prefix).
+  # ConnTest tests, and by ConnectionNotifier when `remote_url_prefix` is
+  # overridden to "") and `/phoenix_kit/sync/api/*` (used by
+  # ConnectionNotifier with the default prefix, since the test env's
+  # `PhoenixKit.Config.get_url_prefix/0` resolves to "/phoenix_kit").
   scope "/sync/api", PhoenixKitSync.Web do
     pipe_through(:api)
 

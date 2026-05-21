@@ -8,7 +8,8 @@ defmodule PhoenixKitSync.ConnectionNotifier do
   ## How It Works
 
   1. When you create a sender connection pointing to a remote site (e.g., "https://remote.com")
-  2. This module calls `POST https://remote.com/{prefix}/db-sync/api/register-connection`
+  2. This module calls `POST https://remote.com{prefix}/sync/api/register-connection`
+     where `{prefix}` mirrors the remote's configured URL prefix (see `remote_url_prefix/0`)
   3. The remote site creates a receiver connection automatically
   4. The result is recorded in the connection's metadata
 
@@ -912,76 +913,67 @@ defmodule PhoenixKitSync.ConnectionNotifier do
 
   # --- Private Functions ---
 
-  defp build_api_url(site_url) do
-    # Normalize URL and add API path
+  defp build_api_url(site_url), do: build_sync_url(site_url, "register-connection")
+  defp build_status_url(site_url), do: build_sync_url(site_url, "status")
+  defp build_delete_url(site_url), do: build_sync_url(site_url, "delete-connection")
+  defp build_verify_url(site_url), do: build_sync_url(site_url, "verify-connection")
+  defp build_status_change_url(site_url), do: build_sync_url(site_url, "update-status")
+  defp build_get_status_url(site_url), do: build_sync_url(site_url, "get-connection-status")
+  defp build_list_tables_url(site_url), do: build_sync_url(site_url, "list-tables")
+  defp build_pull_data_url(site_url), do: build_sync_url(site_url, "pull-data")
+  defp build_schema_url(site_url), do: build_sync_url(site_url, "table-schema")
+  defp build_records_url(site_url), do: build_sync_url(site_url, "table-records")
+
+  defp build_sync_url(site_url, endpoint) do
     base_url = String.trim_trailing(site_url, "/")
-
-    # Try to detect the PhoenixKit prefix from the URL
-    # Default is /phoenix_kit but could be configured differently
-    prefix = detect_prefix(base_url)
-
-    "#{base_url}#{prefix}/sync/api/register-connection"
+    "#{base_url}#{remote_url_prefix()}/sync/api/#{endpoint}"
   end
 
-  defp build_status_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/status"
+  @doc """
+  Returns the URL prefix the notifier prepends to remote sync API paths.
+
+  The remote site mounts its sync routes under `PhoenixKit.Config.get_url_prefix/0`
+  (via `PhoenixKitSync.Routes.generate/1`), so by default we mirror the *local*
+  site's configured prefix — correct whenever both deployments share the same
+  routing config, which is the common case. (Previously this was hardcoded to
+  `/phoenix_kit`, which 404'd against any remote mounted under a different
+  prefix — see https://github.com/BeamLabEU/phoenix_kit_sync/issues/8.)
+
+  Deployments whose remote uses a different prefix than the local site can
+  override it globally:
+
+      config :phoenix_kit_sync, remote_url_prefix: "/custom"
+
+  The result is normalized: a leading slash is ensured, trailing slashes are
+  stripped, and an empty or root prefix (`""` or `"/"`) yields `""` so paths
+  resolve to `<site_url>/sync/api/...`.
+  """
+  @spec remote_url_prefix() :: String.t()
+  def remote_url_prefix do
+    case Application.get_env(:phoenix_kit_sync, :remote_url_prefix) do
+      nil -> local_url_prefix()
+      configured -> configured
+    end
+    |> normalize_prefix()
   end
 
-  defp build_delete_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/delete-connection"
+  # Mirror the local site's configured prefix. Falls back to PhoenixKit's own
+  # default if Config isn't available, matching integration.ex's behaviour.
+  defp local_url_prefix do
+    PhoenixKit.Config.get_url_prefix()
+  rescue
+    _ -> "/phoenix_kit"
   end
 
-  defp build_verify_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/verify-connection"
+  defp normalize_prefix(prefix) when is_binary(prefix) do
+    case prefix |> String.trim() |> String.trim_trailing("/") do
+      "" -> ""
+      "/" <> _ = normalized -> normalized
+      normalized -> "/" <> normalized
+    end
   end
 
-  defp build_status_change_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/update-status"
-  end
-
-  defp build_get_status_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/get-connection-status"
-  end
-
-  defp build_list_tables_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/list-tables"
-  end
-
-  defp build_pull_data_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/pull-data"
-  end
-
-  defp build_schema_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/table-schema"
-  end
-
-  defp build_records_url(site_url) do
-    base_url = String.trim_trailing(site_url, "/")
-    prefix = detect_prefix(base_url)
-    "#{base_url}#{prefix}/sync/api/table-records"
-  end
-
-  defp detect_prefix(_base_url) do
-    # For now, use default prefix
-    # In future, could try to detect from site or make configurable per-connection
-    "/phoenix_kit"
-  end
+  defp normalize_prefix(_), do: ""
 
   defp build_request_body(conn_name, our_url, raw_token, password) do
     body = %{

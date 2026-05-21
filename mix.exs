@@ -1,7 +1,7 @@
 defmodule PhoenixKitSync.MixProject do
   use Mix.Project
 
-  @version "0.1.4"
+  @version "0.1.5"
   @description "Peer-to-peer data sync module for PhoenixKit"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_sync"
 
