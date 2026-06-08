@@ -1,3 +1,17 @@
+## 0.1.6 - 2026-06-08
+
+### Added
+- `pk_dep/3` in `mix.exs`: a `phoenix_kit*` dep resolves from Hex by default, but
+  exporting `<APP>_PATH` (e.g. `PHOENIX_KIT_PATH=../phoenix_kit`) swaps the Hex
+  pin for a local `path:` + `override: true` dep at resolve time, for cross-repo
+  development against an unpublished core checkout. With the var unset (or blank),
+  resolution is identical to before — nothing path-based ships. See the "Local
+  cross-repo development" section in `AGENTS.md`.
+
+### Changed
+- Updated locked dependency versions (`mix.lock`); declared constraints in
+  `mix.exs` are unchanged.
+
 ## 0.1.5 - 2026-05-21
 
 ### Fixed
