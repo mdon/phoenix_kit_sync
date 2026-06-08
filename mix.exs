@@ -73,9 +73,9 @@ defmodule PhoenixKitSync.MixProject do
     env_var = String.upcase(Atom.to_string(app)) <> "_PATH"
 
     case System.get_env(env_var) do
-      nil when opts == [] -> {app, requirement}
-      nil -> {app, requirement, opts}
-      path -> {app, [path: path, override: true] ++ opts}
+      path when is_binary(path) and path != "" -> {app, [path: path, override: true] ++ opts}
+      _unset_or_blank when opts == [] -> {app, requirement}
+      _unset_or_blank -> {app, requirement, opts}
     end
   end
 
