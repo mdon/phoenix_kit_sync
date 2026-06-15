@@ -38,6 +38,10 @@ defmodule PhoenixKitSync.MixProject do
         "compile --force --warnings-as-errors",
         "format",
         "deps.unlock --check-unused",
+        # Scan for retired Hex deps. Run via `cmd` so Hex bootstraps in a fresh
+        # process — the hex.* archive tasks aren't resolvable via Mix.Task.run
+        # inside an alias.
+        "cmd mix hex.audit",
         "quality.ci"
       ],
       "test.setup": ["ecto.create --quiet", "ecto.migrate --quiet"],
