@@ -85,7 +85,7 @@ defmodule PhoenixKitSync.MixProject do
 
   defp deps do
     [
-      pk_dep(:phoenix_kit, "~> 1.7"),
+      pk_dep(:phoenix_kit, ">= 1.7.184 and < 2.0.0"),
       {:phoenix_live_view, "~> 1.1"},
       {:phoenix, "~> 1.8.1"},
       {:ecto_sql, "~> 3.10"},

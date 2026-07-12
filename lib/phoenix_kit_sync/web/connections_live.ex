@@ -1778,15 +1778,11 @@ defmodule PhoenixKitSync.Web.ConnectionsLive do
               </label>
             </div>
 
-            <div class="flex items-center gap-3 mt-4">
-              <input
-                type="checkbox"
-                name="connection[auto_sync_enabled]"
-                class="checkbox checkbox-primary"
-                checked={Ecto.Changeset.get_field(@changeset, :auto_sync_enabled)}
-              />
-              <label class="text-sm font-medium">Enable Auto Sync</label>
-            </div>
+            <.checkbox
+              field={@form[:auto_sync_enabled]}
+              label="Enable Auto Sync"
+              wrapper_class="mt-4"
+            />
           <% end %>
 
           <%!-- Actions --%>
