@@ -326,7 +326,7 @@ All schemas use `@primary_key {:uuid, UUIDv7, autogenerate: true}` + `uuid_gener
 
 ## Versioning & Releases
 
-This project follows [Semantic Versioning](https://semver.org/). Release cuts are done by the project maintainer — agents do not bump `@version` or edit `CHANGELOG.md` unless explicitly asked.
+This project follows [Semantic Versioning](https://semver.org/).
 
 ### Version locations
 
