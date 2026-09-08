@@ -1,6 +1,16 @@
 defmodule PhoenixKitSync.ModuleTest do
   use ExUnit.Case, async: true
 
+  # `function_exported?/3` answers FALSE for a module that is merely not
+  # loaded, not only for one that lacks the function, so a bare callback
+  # assertion fails intermittently under a random seed and never when the file
+  # runs alone -- the shape that reads as flaky infrastructure and gets re-run
+  # instead of fixed. Reproduced in two sibling modules before this went in.
+  setup_all do
+    Code.ensure_loaded!(PhoenixKitSync)
+    :ok
+  end
+
   describe "behaviour implementation" do
     test "implements PhoenixKit.Module" do
       behaviours =
@@ -113,8 +123,8 @@ defmodule PhoenixKitSync.ModuleTest do
   end
 
   describe "version/0" do
-    test "returns version string" do
-      assert PhoenixKitSync.version() == "0.2.2"
+    test "matches the version in mix.exs" do
+      assert PhoenixKitSync.version() == Mix.Project.config()[:version]
     end
   end
 

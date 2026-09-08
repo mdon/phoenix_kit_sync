@@ -14,12 +14,19 @@ defmodule PhoenixKitSync.CorePinConformanceTest do
 
   Core 1.7 is deliberately excluded: core 2.0.0 squashed the migration chain to
   a V135 floor and this module is verified only against that baseline.
+
+  The floor is 2.13.6, not 2.0.0. `connections_live.ex` passes
+  `variant={:border}` to core's `nav_tabs`, and core only added that value in
+  2.13.6; below it the component's `attr :values` check fails and this module
+  does not compile. `mix.lock` is not published to Hex, so the requirement is
+  the only thing standing between a consumer and that failure — which is why
+  the floor is asserted here and not merely documented.
   """
 
-  @must_admit ["2.0.0", "2.0.7", "2.1.0", "2.9.4"]
-  @must_reject ["1.7.189", "1.7.236", "1.9.4", "3.0.0"]
+  @must_admit ["2.13.6", "2.14.0", "2.21.5"]
+  @must_reject ["1.7.189", "1.7.236", "2.0.0", "2.13.5", "3.0.0"]
 
-  test "the :phoenix_kit requirement admits every core 2.x and nothing else" do
+  test "the :phoenix_kit requirement admits every core from the floor up, and nothing else" do
     requirement = core_requirement()
 
     assert match?({:ok, _parsed}, Version.parse_requirement(requirement)),
@@ -29,7 +36,8 @@ defmodule PhoenixKitSync.CorePinConformanceTest do
       assert Version.match?(version, requirement),
              "`:phoenix_kit` requirement #{inspect(requirement)} rejects core #{version}. " <>
                "A pin that excludes a core minor breaks `mix deps.get` for every host " <>
-               "running this module alongside that core. Keep it a two-segment `~> 2.0`."
+               "running this module alongside that core. Widen the upper bound rather " <>
+               "than pinning a single minor."
     end
 
     for version <- @must_reject do

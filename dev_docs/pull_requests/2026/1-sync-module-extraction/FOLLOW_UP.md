@@ -238,7 +238,7 @@ that would fail on revert:
 These are HIGH/MEDIUM findings the structural agents and C12.5 deep
 dive flagged that change production behaviour. Surfaced rather than
 fixed unilaterally per the workspace
-[feedback_pr_followups.md](~/.claude/projects/-Users-maxdon-Desktop-Elixir/memory/feedback_pr_followups.md)
+[feedback_pr_followups.md]the agent memory note `feedback_pr_followups.md`
 ("Don't silently defer PR review findings").
 
 - **(A) SSRF guard on `connection.site_url`** — HIGH. The URL field is
