@@ -88,6 +88,7 @@ defmodule PhoenixKitSync do
   alias PhoenixKitSync.SessionStore
 
   @module_name "sync"
+  @version Mix.Project.config()[:version]
   @enabled_key "sync_enabled"
   @incoming_mode_key "sync_incoming_mode"
   @incoming_password_key "sync_incoming_password"
@@ -165,7 +166,7 @@ defmodule PhoenixKitSync do
   def module_name, do: "Sync"
 
   @impl PhoenixKit.Module
-  def version, do: "0.2.2"
+  def version, do: @version
 
   @impl PhoenixKit.Module
   def route_module, do: PhoenixKitSync.Routes

@@ -113,8 +113,8 @@ defmodule PhoenixKitSync.ModuleTest do
   end
 
   describe "version/0" do
-    test "returns version string" do
-      assert PhoenixKitSync.version() == "0.2.2"
+    test "matches the version in mix.exs" do
+      assert PhoenixKitSync.version() == Mix.Project.config()[:version]
     end
   end
 
