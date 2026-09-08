@@ -15,7 +15,7 @@ a WebSocket protocol for cross-site communication, and Oban-backed batch
 import. Implements `PhoenixKit.Module`; it is a library and borrows the host's
 Repo, Endpoint and Settings.
 
-- **Depends on:** `phoenix_kit` `~> 2.0` (Hex). No sibling `phoenix_kit_*` deps. Other runtime deps: `websockex` (WebSocket client towards a remote sender), `websock_adapter` (server-side upgrade), `oban` (import jobs), `jason`.
+- **Depends on:** `phoenix_kit` `>= 2.13.6 and < 3.0.0` (Hex; the floor is functional, see Landmines). No sibling `phoenix_kit_*` deps. Other runtime deps: `websockex` (WebSocket client towards a remote sender), `websock_adapter` (server-side upgrade), `oban` (import jobs), `jason`.
 - **Consumed by:** nothing yet.
 - **Admin surface:** tab `:admin_sync` "Sync" at `sync` (group `:admin_modules`, priority 640, `match: :prefix`) with subtabs Overview `sync` (`Web.Index`), Connections `sync/connections` (`Web.ConnectionsLive`), History `sync/history` (`Web.History`). Public: REST API under `<url_prefix>/sync/api/*` and a WebSocket forward at `<url_prefix>/sync/websocket`, both from `route_module/0`.
 - **Module key** `"sync"`; settings prefix `sync_`; permission key `"sync"`.
@@ -88,8 +88,8 @@ so an unused lock entry or a retired dep fails it.
 - `PhoenixKitSync.Migration.up/1` is built on `Ecto.Migration` macros and raises outside a migrator process; call it from a host migration file or via `Ecto.Migrator.up/4`.
 - `SessionStore` owns one global ETS table: tests start it in `setup_all` and accept `{:error, {:already_started, _}}`; a per-test `start_link` fails.
 - `enabled?/0` and `get_config/0` hit the DB. Without `config :phoenix_kit, repo: ...` every `PhoenixKit.RepoHelper` call dies with "No repository configured"; in unit tests assert on `function_exported?/3` or tag `:integration`.
-- `connections_live.ex` renders the tab strip with `variant={:border}`, which core's `nav_tabs` only accepts from **2.13.6** on. The pin is `~> 2.0` and `core_pin_conformance_test.exs` requires that two-segment form, so the floor is documented here rather than enforced: a lock resolving an older core fails `mix compile --warnings-as-errors` on an attribute-value warning, not on anything that looks like a version problem. `mix deps.update phoenix_kit` is the fix.
-- `sync_channel_test.exs` asserts on channel replies with the default 100 ms `assert_receive` timeout and occasionally loses that race on a loaded machine, reporting one failure whose mailbox holds only `{:sync, {:receiver_joined, pid}}`. Re-run before believing it; the suite is green across seeds.
+- `connections_live.ex` renders the tab strip with `variant={:border}`, which core's `nav_tabs` only accepts from **2.13.6** on. Below that the attribute fails `attr :values` validation and the module does not compile — a failure that reads as an attribute typo, not a version problem. The requirement is `>= 2.13.6 and < 3.0.0` for exactly this reason, and `core_pin_conformance_test.exs` asserts the floor; `mix.lock` is not published to Hex, so the requirement is the only thing that protects a consumer. If a local checkout still fails this way, its lock predates the floor: `mix deps.update phoenix_kit`.
+- `sync_channel_test.exs` replies are served by a live Postgres introspection query, so `assert_push`'s default 100 ms deadline loses the race on a loaded machine and reports an empty mailbox as a protocol failure. Those assertions carry an explicit `@reply_timeout`; keep it on any new DB-backed reply.
 
 ## Architecture
 
@@ -204,7 +204,7 @@ Support modules (`test/support/`):
 - `DataCase` (sandbox + `:integration`, imports `ChangesetHelpers.errors_on/1`), `ConnCase` (`Phoenix.ConnTest` against `Test.Endpoint`), `LiveCase` (`Phoenix.LiveViewTest`; `fake_scope/1` builds a `PhoenixKit.Users.Auth.Scope` with the `"sync"` permission, `put_test_scope/2` puts it in the session), `ChannelCase` (`Phoenix.ChannelTest` for `SyncSocket`/`SyncChannel`).
 - `Test.Endpoint` / `Test.Router` / `Test.Layouts` / `Test.Hooks`: the router mounts the LiveViews at `/en/admin/sync/*` (plus `/sync/send`, `/sync/receive`) inside a `live_session` whose `on_mount` hook assigns `:phoenix_kit_current_scope` from the session, and mirrors the API at both `/sync/api/*` and `/phoenix_kit/sync/api/*` plus the WebSocket forward at both prefixes. Flashes render with ids `flash-info`/`flash-error`/`flash-warning`.
 - `TestActor.uuid/0`: a real registered user for actor FKs. `ActivityLogAssertions.assert_activity_logged/2`: exactly one activity row for an action, with `:resource_uuid`, `:actor_uuid`, `:metadata_has` filters.
-- `core_pin_conformance_test.exs` keeps the `:phoenix_kit` requirement a two-segment `~> 2.0` (a three-segment pin excludes later core minors and breaks `mix deps.get` for hosts).
+- `core_pin_conformance_test.exs` asserts the `:phoenix_kit` floor (2.13.6, see Landmines) and that the upper bound still admits every later 2.x — a requirement pinned to one minor breaks `mix deps.get` for hosts.
 
 ```bash
 mix test --exclude integration       # unit only

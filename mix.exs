@@ -85,7 +85,13 @@ defmodule PhoenixKitSync.MixProject do
 
   defp deps do
     [
-      pk_dep(:phoenix_kit, "~> 2.0"),
+      # Floor is 2.13.6, not 2.0: `connections_live.ex` renders the tab strip
+      # with core's `nav_tabs` `variant={:border}`, which core only started
+      # accepting in 2.13.6. Below it the attribute fails `attr :values`
+      # validation and the module does not compile. `mix.lock` is not
+      # published to Hex, so only this requirement protects a consumer.
+      # Written as a range rather than `~> 2.13.6`, which would exclude 2.14+.
+      pk_dep(:phoenix_kit, ">= 2.13.6 and < 3.0.0"),
       {:phoenix_live_view, "~> 1.1"},
       {:phoenix, "~> 1.8.1"},
       {:ecto_sql, "~> 3.10"},

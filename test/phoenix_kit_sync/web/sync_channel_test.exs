@@ -38,6 +38,11 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
     end
   end
 
+  # These replies are served by a live Postgres introspection query, so the
+  # default 100 ms assert_push deadline loses the race on a loaded machine and
+  # reports an empty mailbox as a protocol failure.
+  @reply_timeout 2_000
+
   describe "request:tables" do
     test "responds with the table list", %{socket: socket, session: session} do
       {:ok, _reply, channel} =
@@ -46,7 +51,7 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
       ref = "tab-1"
       push(channel, "request:tables", %{"ref" => ref})
 
-      assert_push("response:tables", %{tables: tables, ref: ^ref})
+      assert_push("response:tables", %{tables: tables, ref: ^ref}, @reply_timeout)
       assert is_list(tables)
     end
   end
@@ -59,7 +64,7 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
       ref = "sch-1"
       push(channel, "request:schema", %{"table" => "phoenix_kit_sync_connections", "ref" => ref})
 
-      assert_push("response:schema", %{schema: schema, ref: ^ref})
+      assert_push("response:schema", %{schema: schema, ref: ^ref}, @reply_timeout)
       assert is_list(schema.columns) or is_map(schema)
     end
 
@@ -70,7 +75,7 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
       ref = "sch-2"
       push(channel, "request:schema", %{"table" => "nonexistent_table_zz", "ref" => ref})
 
-      assert_push("response:error", %{error: msg, ref: ^ref})
+      assert_push("response:error", %{error: msg, ref: ^ref}, @reply_timeout)
       assert msg =~ "not found"
     end
   end
@@ -83,7 +88,7 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
       ref = "cnt-1"
       push(channel, "request:count", %{"table" => "phoenix_kit_sync_connections", "ref" => ref})
 
-      assert_push("response:count", %{count: count, ref: ^ref})
+      assert_push("response:count", %{count: count, ref: ^ref}, @reply_timeout)
       assert is_integer(count)
     end
   end
@@ -101,7 +106,12 @@ defmodule PhoenixKitSync.Web.SyncChannelTest do
         "limit" => 10
       })
 
-      assert_push("response:records", %{records: records, ref: ^ref, has_more: has_more})
+      assert_push(
+        "response:records",
+        %{records: records, ref: ^ref, has_more: has_more},
+        @reply_timeout
+      )
+
       assert is_list(records)
       assert is_boolean(has_more)
     end
