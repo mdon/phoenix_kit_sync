@@ -56,6 +56,13 @@ PHOENIX_KIT_PATH=../phoenix_kit mix deps.get && PHOENIX_KIT_PATH=../phoenix_kit 
 `mix precommit` here also runs `deps.unlock --check-unused` and `mix hex.audit`,
 so an unused lock entry or a retired dep fails it.
 
+Repo-local aliases:
+
+- `mix quality` — `format` + `credo --strict` + `dialyzer` (applies formatting).
+- `mix quality.ci` — `format --check-formatted` + `credo --strict` + `dialyzer`: it CHECKS formatting rather than applying it, so run `mix format` first.
+- `mix test.reset` — drops the test database and recreates it.
+- `mix test.setup` — `ecto.create` on the test repo, the alias equivalent of `createdb`.
+
 ## Conventions
 
 - Module key `"sync"`; tab ids `:admin_sync_*`; URL segments use hyphens (`sync/connections`, `sync/api/register-connection`). The module test rejects underscores in tab paths.
