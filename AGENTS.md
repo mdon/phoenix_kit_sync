@@ -176,7 +176,7 @@ table-backed schemas (`test/schema_prefix_conformance_test.exs` enforces it).
 
 Test DB `phoenix_kit_sync_test` (suffix `MIX_TEST_PARTITION` if set);
 `PGUSER`, `PGPASSWORD`, `PGHOST` are honoured (defaults `postgres`/`postgres`/
-`localhost`; on the Mac's brew Postgres use `PGUSER=maxdon`). `test_helper.exs`
+`localhost`). `test_helper.exs`
 probes `psql -lqt` for the DB, and without it excludes `:integration`. Pure
 unit tests (schemas, changesets, SessionStore, Errors, Paths, worker job
 building, pure LiveView helpers) run regardless; DB-backed tests are every
